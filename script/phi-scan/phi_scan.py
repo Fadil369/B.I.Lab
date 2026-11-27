@@ -7,7 +7,7 @@ and for logging statements that appear to write patient fields. It cannot prove 
 is free of PHI. See docs/healthcare-security-scan.md for what it covers and what it misses.
 
 Design rules:
-  * Standard library only, so it runs on any runner with Python 3.9+.
+  * Standard library only, so it runs on any runner with Python 3.10+.
   * Matched values are always masked in console output and SARIF, so the scan itself
     never copies PHI into CI logs or the code-scanning database.
   * Every finding can be suppressed inline (``phi-scan:ignore``) or via a config file,

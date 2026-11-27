@@ -160,7 +160,7 @@ jobs:
           if [[ $status -eq 1 ]]; then
             echo "::error title=Secrets found::gitleaks found possible secrets. Rotate them first, then remove them from history."
           fi
-          exit $status
+          exit "$status"
 
       - name: Upload SARIF
         if: always() && inputs.upload-sarif && hashFiles('gitleaks.sarif') != ''
@@ -348,7 +348,7 @@ jobs:
           if [[ $status -eq 1 ]]; then
             echo "::error title=Possible PHI::phi-scan found possible PHI at or above '${FAIL_ON}'. Confirm each value is synthetic, then fix it or mark it with phi-scan:ignore <reason>."
           fi
-          exit $status
+          exit "$status"
 
       - name: Upload SARIF
         if: always() && inputs.upload-sarif && hashFiles('phi-scan.sarif') != ''
