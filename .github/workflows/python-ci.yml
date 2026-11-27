@@ -57,9 +57,11 @@ jobs:
           cache: pip
 
       - name: Install
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
         run: |
           python -m pip install --upgrade pip
-          ${{ inputs.install-command }}
+          bash -eo pipefail -c "$INSTALL_COMMAND"
 
       - name: Ruff lint
         if: inputs.run-ruff
@@ -70,14 +72,27 @@ jobs:
 
       - name: mypy
         if: inputs.run-mypy
+        env:
+          MYPY_TARGET: ${{ inputs.mypy-target }}
         run: |
           pip install mypy
-          mypy ${{ inputs.mypy-target }}
+          set -f
+          read -r -a targets <<< "$MYPY_TARGET"
+          set +f
+          if [ "${#targets[@]}" -eq 0 ]; then
+            targets=(.)
+          fi
+          mypy "${targets[@]}"
 
       - name: pytest
+        env:
+          PYTEST_ARGS: ${{ inputs.pytest-args }}
         run: |
           pip install pytest pytest-cov
-          pytest ${{ inputs.pytest-args }}
+          set -f
+          read -r -a pytest_args <<< "$PYTEST_ARGS"
+          set +f
+          pytest "${pytest_args[@]}"
 
       - name: Upload coverage
         if: inputs.upload-coverage && always()

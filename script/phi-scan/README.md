@@ -1,8 +1,9 @@
 # phi-scan
 
-Heuristic, dependency-free scanner that flags possible PHI (national ID / Iqama numbers, MRNs,
-dates of birth, phone numbers, emails, FHIR Patient fixtures, HL7/DICOM files, and log calls
-that mention patient fields). Values are always masked in output.
+Heuristic, dependency-free scanner that flags possible PHI (Saudi national ID / Iqama numbers,
+Saudi IBANs, MRNs, dates of birth, phone numbers, emails, FHIR Patient fixtures, HL7/DICOM files,
+and log calls — including Kotlin/Android `Log.*` and `Timber.*` — that mention patient, SCFHS
+license or NPHIES identifier fields). Values are always masked in output.
 
 ```bash
 python script/phi-scan/phi_scan.py --root . --fail-on medium --sarif phi-scan.sarif

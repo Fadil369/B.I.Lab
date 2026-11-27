@@ -24,6 +24,9 @@ def make_luhn(prefix9: str) -> str:
 SYN_NID = make_luhn("108273645")   # synthetic citizen-shaped ID
 SYN_IQAMA = make_luhn("239184756")  # synthetic resident-shaped ID
 SYN_SSN = "-".join(["345", "67", "8912"])
+SYN_IBAN = "SA" + "44" + "20000001234567891234"
+SYN_IBAN_SPACED = " ".join(["SA44", "2000", "0001", "2345", "6789", "1234"])
+SYN_SCFHS = "-".join(["18", "R", "M", "0012345"])
 
 
 class ScanCase(unittest.TestCase):
@@ -109,6 +112,45 @@ class TestDetectors(ScanCase):
         f, _ = self.scan({"a.ts": "console.log('loaded', patient.nationalId);\n"
                                   "logger.info('patient_count=%d', n)\n"})
         self.assertEqual(self.ids(f), ["PHI008"])
+
+    def test_saudi_iban_and_placeholder(self):
+        placeholder = "SA" + ("0" * 22)
+        f, sarif = self.scan({
+            "billing.kt": (
+                f'val iban = "{SYN_IBAN}"\n'
+                f'val formatted = "{SYN_IBAN_SPACED}"\n'
+                f'val safePlaceholder = "{placeholder}"\n'
+            )
+        })
+        self.assertEqual(self.ids(f), ["PHI011", "PHI011"])
+        self.assertTrue(all(item.severity == "high" for item in f))
+        blob = json.dumps(sarif)
+        self.assertNotIn(SYN_IBAN, blob)
+        self.assertNotIn(SYN_IBAN_SPACED, blob)
+
+    def test_kotlin_android_log_calls_and_scfhs_nphies_leaks(self):
+        kotlin_src = "\n".join([
+            'Log.d(TAG, "patient mrn=$mrn")',
+            'Log.i(TAG, "clinician scfhsLicense=$scfhsLicense")',
+            f'Log.w(TAG, "expired registration {SYN_SCFHS}")',
+            'Log.e(TAG, "lookup failed for nphiesMemberId=$member")',
+            'Log.v(TAG, "iban=$accountIban")',
+            'Log.wtf(TAG, "corrupt payload nphies.sa/identifier/iqama/$id")',
+            'Timber.d("sync patient=$id")',
+            'Timber.i("scfhs_number=%s", scfhsNo)',
+            'Timber.w("nphiesClaimId=%s", claimId)',
+            'Timber.e("contact email=%s", userEmail)',
+            'Timber.tag("BPR").d("clinician.scfhs=%s", lic)',
+            'Log.e(',
+            '    TAG,',
+            '    "multiline nphiesIdentifier=$ref"',
+            ')',
+            'Timber.i("SCFHS trust store initialized")',
+            'Log.i(TAG, "NPHIES client ready")',
+        ]) + "\n"
+        f, _ = self.scan({"BprLogger.kt": kotlin_src})
+        phi008 = [item for item in f if item.rule.id == "PHI008"]
+        self.assertEqual(len(phi008), 12)
 
     def test_fhir_patient_outside_synthetic(self):
         res = json.dumps({"resourceType": "Patient", "birthDate": "1990-01-01"})

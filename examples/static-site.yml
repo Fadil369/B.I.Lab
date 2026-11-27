@@ -43,8 +43,8 @@ jobs:
     uses: Fadil369/B.I.Lab/.github/workflows/claude-code.yml@v1
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read
     with:
@@ -57,8 +57,8 @@ jobs:
     uses: Fadil369/B.I.Lab/.github/workflows/claude-code.yml@v1
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read
     with:
