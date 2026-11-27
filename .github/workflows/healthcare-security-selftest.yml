@@ -1,4 +1,4 @@
-# Manual run of the reusable healthcare scan against this repository, to exercise it end to end.
+# Internal CI for this library (not reusable): manual end-to-end run of healthcare-security-scan.yml.
 name: Healthcare security scan (self-test)
 
 on:

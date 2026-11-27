@@ -1,3 +1,4 @@
+# Internal CI for this library (not reusable): unit tests and self-scan for script/phi-scan.
 name: phi-scan tests
 
 on:

@@ -1,0 +1,28 @@
+# Example caller: healthcare security scan (secrets, dependencies, image, CodeQL, possible PHI)
+# for any BrainSAIT repo that touches patient or claims data.
+name: Healthcare Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly, catches newly published CVEs
+
+permissions:
+  contents: read
+
+jobs:
+  healthcare:
+    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      codeql-languages: '["javascript-typescript","python","actions"]'
+      dockerfile: Dockerfile   # optional: build the image and scan it
+      phi-fail-on: medium
+    secrets:
+      tools-token: ${{ secrets.BILAB_READ_TOKEN }}   # only while B.I.Lab is private

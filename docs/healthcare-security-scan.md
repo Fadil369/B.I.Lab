@@ -23,7 +23,7 @@ scanning, dependency and container scanning, CodeQL, and a heuristic check for p
 Add `.github/workflows/security.yml` to the repository you want to scan:
 
 ```yaml
-name: Security
+name: Healthcare Security
 
 on:
   pull_request:
@@ -32,13 +32,17 @@ on:
   schedule:
     - cron: '17 3 * * 1'   # weekly, to catch newly published CVEs
 
+permissions:
+  contents: read
+
 jobs:
   healthcare:
-    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@main  # pin to a SHA
+    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1  # or a SHA
     permissions:
       contents: read
       security-events: write
       actions: read
+      packages: read
     with:
       codeql-languages: '["javascript-typescript","python","actions"]'
       dockerfile: Dockerfile          # optional: build and scan the image
@@ -47,13 +51,16 @@ jobs:
       tools-token: ${{ secrets.BILAB_READ_TOKEN }}  # only while B.I.Lab is private
 ```
 
+The same file is in [`examples/healthcare-security.yml`](../examples/healthcare-security.yml).
+Until the `v1` tag exists, use `@main` or a commit SHA.
+
 Then, in branch protection, require the single check **Healthcare security gate**.
 
 ### Things the calling repository must have
 
 | Need | Why |
 |---|---|
-| `security-events: write` | Upload SARIF to the Security tab. |
+| `security-events: write`, `actions: read`, `packages: read` | Upload SARIF, and let the nested `trivy-scan.yml` / `codeql.yml` run. A called workflow can't get more than the caller grants. |
 | GitHub Advanced Security (private repos) | CodeQL and SARIF upload on private repos need it. Without it set `run-codeql: false` and `upload-sarif: false`; reports are still kept as workflow artifacts. |
 | Read access to `Fadil369/B.I.Lab` | The PHI job checks out `script/phi-scan` from here. While this repo is private, pass a fine-grained token with *Contents: read* on this repo as `tools-token`, and allow access under *Settings → Actions → General → Access*. |
 
@@ -65,14 +72,16 @@ Then, in branch protection, require the single check **Healthcare security gate*
 | `secrets-full-history` | `true` | On push/schedule scan all history; PRs always scan only their own commits. |
 | `trivy-severity` | `CRITICAL,HIGH` | Severities that fail the build. All severities still go to SARIF. |
 | `trivy-ignore-unfixed` | `true` | Don't fail on CVEs with no fix available. |
-| `image-ref` | `''` | Existing image to scan (registry login is the caller's job). |
+| `image-ref` | `''` | Existing image to scan, via `trivy-scan.yml`. |
+| `registry-username` + secret `registry-password` | `''` | Credentials for a private registry holding `image-ref`. |
 | `dockerfile`, `docker-context` | `''`, `.` | Build an image locally and scan it. |
 | `codeql-languages` | `["actions"]` | JSON array. Only list languages that exist in the repo, or CodeQL fails. |
 | `codeql-queries` | `security-extended` | Or `security-and-quality`. |
+| `codeql-build-mode` | `none` | `autobuild` for Go and Swift. |
 | `phi-fail-on` | `medium` | `low`, `medium`, `high` or `none`. |
 | `phi-config` | `.phi-scan.json` | Path to the PHI scanner config in the calling repo. |
 | `upload-sarif` | `true` | Send results to code scanning. |
-| `artifact-retention-days` | `90` | How long raw reports stay as artifacts. |
+| `artifact-retention-days` | `90` | How long raw gitleaks, built-image and phi-scan reports stay as artifacts (`trivy-scan.yml` keeps its own for 30 days). |
 | `tools-ref` | `main` | Ref of this repo to load phi-scan from. Pin it. |
 
 ---
@@ -91,17 +100,25 @@ partner tokens and should be turned on as well where available.
 
 ### 2. Dependencies and infrastructure: Trivy filesystem scan
 
+Runs the library's [`trivy-scan.yml`](../.github/workflows/trivy-scan.yml) with `scanners: vuln,misconfig`.
+
 | Covers | Cannot guarantee |
 |---|---|
 | Known CVEs in lockfiles/manifests (npm, pip, Poetry, Go, Maven, Cargo, Composer, etc.) and misconfigurations in Dockerfiles, Kubernetes manifests, Terraform, CloudFormation and Helm. | Vulnerabilities not yet in public advisory databases, flaws in your own code, packages installed at runtime without a lockfile, and whether a vulnerable function is actually reachable. Misconfig checks are generic; they don't know your HIPAA hosting requirements (e.g. that a bucket must be KMS-encrypted with a specific key). |
 
 ### 3. Container image: Trivy image scan (optional)
 
+With `image-ref`, this calls `trivy-scan.yml` in image mode. With `dockerfile`, it builds the
+image on the runner and scans it in the same job, because a local image can't be passed to
+another workflow.
+
 | Covers | Cannot guarantee |
 |---|---|
 | OS packages and language packages inside the built image, secrets baked into image layers, and image misconfiguration. | The image that actually runs in production (scan the deployed digest too, or add registry scanning), runtime behaviour, or host/cluster hardening. |
 
 ### 4. Code: CodeQL
+
+Runs the library's [`codeql.yml`](../.github/workflows/codeql.yml).
 
 | Covers | Cannot guarantee |
 |---|---|
@@ -191,8 +208,10 @@ officer confirm it.
 
 ## Operating notes
 
-- **Pin everything.** All actions are pinned to commit SHAs. Pin `tools-ref` and the `uses:`
-  line in callers to a SHA or release tag too.
+- **Pin everything.** Third-party actions in this workflow, `trivy-scan.yml` and `codeql.yml`
+  are pinned to commit SHAs, because a hijacked tag on a scanner would run with
+  `security-events: write`. Pin `tools-ref` and the caller's `uses:` line to a tag or SHA too.
+  The nested library calls use `@main` until a `v1` tag exists.
 - **Weekly schedule.** New CVEs appear without code changes; the scheduled run catches them.
 - **Triage SLA [guess, adjust to your policy]:** secrets and high PHI findings same day;
   critical CVEs within 7 days; high within 30.
@@ -216,8 +235,10 @@ officer confirm it.
 | Path | Purpose |
 |---|---|
 | `.github/workflows/healthcare-security-scan.yml` | The reusable workflow. |
-| `.github/workflows/healthcare-security-selftest.yml` | Manual end-to-end run against this repo. |
-| `.github/workflows/phi-scan-tests.yml` | Unit tests and self-scan for phi-scan. |
+| `.github/workflows/trivy-scan.yml`, `codeql.yml` | Library workflows it calls (SHA-pinned, `upload-sarif` input added). |
+| `examples/healthcare-security.yml` | Copy-ready caller. |
+| `.github/workflows/healthcare-security-selftest.yml` | Manual end-to-end run against this repo (internal). |
+| `.github/workflows/phi-scan-tests.yml` | Unit tests and self-scan for phi-scan (internal). |
 | `script/phi-scan/phi_scan.py` | The PHI heuristics scanner. |
 | `script/phi-scan/test_phi_scan.py` | Tests (all identifiers synthetic, generated at runtime). |
 | `.phi-scan.json` | This repo's scanner config (excludes the test file). |

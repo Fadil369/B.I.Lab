@@ -1,33 +1,21 @@
-# Reusable security scan for healthcare repositories (HIPAA / NPHIES oriented).
+# BrainSAIT reusable workflow: Healthcare security scan (HIPAA / NPHIES oriented)
 #
-# BRAINSAIT: Runs four independent checks and one gate job:
-#   1. secrets       - gitleaks over git history (or only the PR's commits)
-#   2. dependencies  - Trivy filesystem scan: vulnerable packages + IaC/Dockerfile misconfig
-#   3. container     - Trivy image scan (only when image-ref or dockerfile is given)
-#   4. codeql        - GitHub CodeQL static analysis (security-extended queries)
-#   5. phi           - phi-scan heuristics for possible PHI in code, fixtures and log calls
-#   gate             - one stable check name to require in branch protection
+# One call runs:
+#   secrets        - gitleaks over git history (or only the PR's commits)
+#   dependencies   - trivy-scan.yml (fs): vulnerable packages + Dockerfile/IaC misconfig
+#   image          - trivy-scan.yml (image), when image-ref is given
+#   built-image    - local docker build + Trivy, when dockerfile is given instead
+#   codeql         - codeql.yml with security-extended queries
+#   phi            - phi-scan heuristics for possible PHI in code, fixtures and log calls
+#   gate           - one stable check, "Healthcare security gate", for branch protection
 #
-# These checks support, but do not prove, HIPAA or NPHIES compliance. Read
+# These checks support, but do not prove, HIPAA, PDPL or NPHIES compliance. See
 # docs/healthcare-security-scan.md for what each check covers and cannot guarantee.
+# Example caller: examples/healthcare-security.yml
 #
-# Usage from another repository:
-#
-#   jobs:
-#     security:
-#       uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@main
-#       permissions:
-#         contents: read
-#         security-events: write
-#         actions: read
-#       with:
-#         codeql-languages: '["javascript-typescript","python","actions"]'
-#       secrets: inherit
-#
-# Every third-party action is pinned to a full commit SHA (tag in the trailing comment).
-# Supply-chain attacks on mutable action tags are a known risk; update SHAs deliberately.
-
-name: Healthcare security scan
+# Nested library workflows are called by full path at @main until the v1 tag exists.
+# Third-party actions are pinned to commit SHAs (tag in the trailing comment).
+name: Healthcare Security Scan
 
 on:
   workflow_call:
@@ -61,17 +49,21 @@ on:
         type: boolean
         default: true
       image-ref:
-        description: Existing container image to scan (e.g. ghcr.io/org/app:sha). Leave empty to skip, or use dockerfile.
+        description: Existing container image to scan (e.g. ghcr.io/org/app:sha). Leave empty to skip.
         type: string
-        default: ''
+        default: ""
+      registry-username:
+        description: Username for a private registry holding image-ref.
+        type: string
+        default: ""
       dockerfile:
-        description: Path to a Dockerfile to build locally and scan. Ignored when image-ref is set.
+        description: Dockerfile to build locally and scan. Ignored when image-ref is set.
         type: string
-        default: ''
+        default: ""
       docker-context:
         description: Build context for dockerfile.
         type: string
-        default: '.'
+        default: "."
       codeql-languages:
         description: JSON array of CodeQL languages, e.g. '["javascript-typescript","python","actions"]'.
         type: string
@@ -80,6 +72,10 @@ on:
         description: CodeQL query suite (security-extended or security-and-quality).
         type: string
         default: security-extended
+      codeql-build-mode:
+        description: none or autobuild (Go and Swift need autobuild).
+        type: string
+        default: none
       phi-fail-on:
         description: Lowest phi-scan severity that fails the build (low, medium, high, none).
         type: string
@@ -93,7 +89,7 @@ on:
         type: boolean
         default: true
       artifact-retention-days:
-        description: Days to keep the raw reports as workflow artifacts (max set by the org/repo).
+        description: Days to keep raw reports from the secrets, built-image and phi jobs as artifacts.
         type: number
         default: 90
       tools-ref:
@@ -104,13 +100,12 @@ on:
       tools-token:
         description: Token with read access to Fadil369/B.I.Lab. Only needed while that repository is private.
         required: false
+      registry-password:
+        description: Password/token for the registry holding image-ref.
+        required: false
 
 permissions:
   contents: read
-
-concurrency:
-  group: healthcare-security-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   secrets:
@@ -121,6 +116,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     env:
       GITLEAKS_VERSION: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -161,7 +157,6 @@ jobs:
           fi
           "$RUNNER_TEMP/gitleaks" "${args[@]}" .
           status=$?
-          echo "status=$status" >> "$GITHUB_OUTPUT"
           if [[ $status -eq 1 ]]; then
             echo "::error title=Secrets found::gitleaks found possible secrets. Rotate them first, then remove them from history."
           fi
@@ -184,94 +179,79 @@ jobs:
           retention-days: ${{ inputs.artifact-retention-days }}
 
   dependencies:
-    name: Dependencies and IaC (Trivy fs)
+    name: Dependencies and IaC
     if: inputs.run-dependencies
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@main
     permissions:
       contents: read
       security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      actions: read
+      packages: read
+    with:
+      scan-type: fs
+      scanners: vuln,misconfig   # secrets are covered by gitleaks above
+      severity: ${{ inputs.trivy-severity }}
+      ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+      fail-on-findings: true
+      upload-sarif: ${{ inputs.upload-sarif }}
+      sarif-category: trivy-fs
 
-      - name: Trivy report (all severities, SARIF)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig
-          format: sarif
-          output: trivy-fs.sarif
-          exit-code: '0'
+  image:
+    name: Container image
+    if: inputs.image-ref != ''
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      scan-type: image
+      scan-ref: ${{ inputs.image-ref }}
+      severity: ${{ inputs.trivy-severity }}
+      ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+      fail-on-findings: true
+      registry-username: ${{ inputs.registry-username }}
+      upload-sarif: ${{ inputs.upload-sarif }}
+      sarif-category: trivy-image
+    secrets:
+      registry-password: ${{ secrets.registry-password }}
 
-      - name: Upload SARIF
-        if: always() && inputs.upload-sarif && hashFiles('trivy-fs.sarif') != ''
-        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
-        with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
-
-      - name: Trivy gate
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig
-          format: table
-          severity: ${{ inputs.trivy-severity }}
-          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
-          exit-code: '1'
-          skip-setup-trivy: true
-
-      - name: Keep report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: trivy-fs-report
-          path: trivy-fs.sarif
-          if-no-files-found: ignore
-          retention-days: ${{ inputs.artifact-retention-days }}
-
-  container:
-    name: Container image (Trivy image)
-    if: inputs.image-ref != '' || inputs.dockerfile != ''
+  # A locally built image only exists on this runner, so it can't be handed to trivy-scan.yml.
+  built-image:
+    name: Built image (Trivy)
+    if: inputs.image-ref == '' && inputs.dockerfile != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Resolve image
-        id: image
+      - name: Build image
+        id: build
         env:
-          IMAGE_REF: ${{ inputs.image-ref }}
           DOCKERFILE: ${{ inputs.dockerfile }}
           CONTEXT: ${{ inputs.docker-context }}
         run: |
           set -euo pipefail
-          if [[ -n "$IMAGE_REF" ]]; then
-            echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
-          else
-            tag="healthcare-scan-local:${GITHUB_SHA::12}"
-            docker build --pull -f "$DOCKERFILE" -t "$tag" "$CONTEXT"
-            echo "ref=$tag" >> "$GITHUB_OUTPUT"
-          fi
+          tag="healthcare-scan-local:${GITHUB_SHA::12}"
+          docker build --pull -f "$DOCKERFILE" -t "$tag" "$CONTEXT"
+          echo "ref=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Trivy report (all severities, SARIF)
+      - name: Trivy report (SARIF, all severities)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ steps.image.outputs.ref }}
+          image-ref: ${{ steps.build.outputs.ref }}
           scanners: vuln,secret,misconfig
           format: sarif
           output: trivy-image.sarif
-          exit-code: '0'
+          exit-code: "0"
 
       - name: Upload SARIF
         if: always() && inputs.upload-sarif && hashFiles('trivy-image.sarif') != ''
@@ -284,57 +264,37 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ steps.image.outputs.ref }}
+          image-ref: ${{ steps.build.outputs.ref }}
           scanners: vuln,secret,misconfig
           format: table
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
-          exit-code: '1'
+          exit-code: "1"
           skip-setup-trivy: true
 
       - name: Keep report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: trivy-image-report
+          name: trivy-built-image-report
           path: trivy-image.sarif
           if-no-files-found: ignore
           retention-days: ${{ inputs.artifact-retention-days }}
 
   codeql:
-    name: CodeQL (${{ matrix.language }})
+    name: CodeQL
     if: inputs.run-codeql && inputs.codeql-languages != '[]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    uses: Fadil369/B.I.Lab/.github/workflows/codeql.yml@main
     permissions:
       contents: read
       security-events: write
       actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        language: ${{ fromJSON(inputs.codeql-languages) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
-        with:
-          languages: ${{ matrix.language }}
-          queries: ${{ inputs.codeql-queries }}
-
-      # Compiled languages use autobuild. Repos that need a custom build should call
-      # CodeQL directly instead of this reusable job.
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
-        with:
-          category: codeql-${{ matrix.language }}
-          upload: ${{ inputs.upload-sarif && 'always' || 'never' }}
+      packages: read
+    with:
+      languages: ${{ inputs.codeql-languages }}
+      queries: ${{ inputs.codeql-queries }}
+      build-mode: ${{ inputs.codeql-build-mode }}
+      upload-sarif: ${{ inputs.upload-sarif }}
 
   phi:
     name: Possible PHI (phi-scan)
@@ -344,6 +304,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     steps:
       - name: Check out repository under test
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -363,7 +324,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Scan for possible PHI
         env:
@@ -385,7 +346,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ $status -eq 1 ]]; then
-            echo "::error title=Possible PHI::phi-scan found possible PHI at or above '${FAIL_ON}'. Confirm each value is synthetic, then fix or mark it with phi-scan:ignore <reason>."
+            echo "::error title=Possible PHI::phi-scan found possible PHI at or above '${FAIL_ON}'. Confirm each value is synthetic, then fix it or mark it with phi-scan:ignore <reason>."
           fi
           exit $status
 
@@ -411,7 +372,7 @@ jobs:
   gate:
     name: Healthcare security gate
     if: always()
-    needs: [secrets, dependencies, container, codeql, phi]
+    needs: [secrets, dependencies, image, built-image, codeql, phi]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -428,7 +389,7 @@ jobs:
             echo '|---|---|'
             echo "$RESULTS" | jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"'
             echo
-            echo 'Passing these checks does not by itself demonstrate HIPAA or NPHIES compliance.'
+            echo 'Passing these checks does not by itself demonstrate HIPAA, PDPL or NPHIES compliance.'
             echo 'See docs/healthcare-security-scan.md in Fadil369/B.I.Lab for coverage and limits.'
           } >> "$GITHUB_STEP_SUMMARY"
           failed=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')

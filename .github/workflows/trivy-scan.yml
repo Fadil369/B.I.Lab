@@ -1,6 +1,9 @@
 # BrainSAIT reusable workflow: Trivy vulnerability, secret and misconfig scan
 # Scans the repo filesystem (default) or a container image and uploads SARIF
 # to the GitHub Security tab.
+#
+# Actions are pinned to full commit SHAs (tag in the trailing comment). Mutable tags on
+# security tooling are a supply-chain risk; bump SHAs deliberately.
 name: Trivy Scan
 
 on:
@@ -32,6 +35,14 @@ on:
         description: Username for a private image registry (image scans only)
         type: string
         default: ""
+      upload-sarif:
+        description: Upload results to code scanning. Set false on private repos without GitHub Advanced Security.
+        type: boolean
+        default: true
+      sarif-category:
+        description: Code scanning category (defaults to trivy-<scan-type>)
+        type: string
+        default: ""
     secrets:
       registry-password:
         required: false
@@ -42,16 +53,19 @@ permissions:
 jobs:
   trivy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write   # upload SARIF
       actions: read            # needed by upload-sarif on private repos
       packages: read           # pull private GHCR images
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Trivy scan (SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
+      - name: Trivy scan (SARIF, all severities)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ inputs.registry-username }}
           TRIVY_PASSWORD: ${{ secrets.registry-password }}
@@ -60,22 +74,29 @@ jobs:
           scan-ref: ${{ inputs.scan-type != 'image' && inputs.scan-ref || '' }}
           image-ref: ${{ inputs.scan-type == 'image' && inputs.scan-ref || '' }}
           scanners: ${{ inputs.scan-type == 'fs' && inputs.scanners || '' }}
-          severity: ${{ inputs.severity }}
           ignore-unfixed: ${{ inputs.ignore-unfixed }}
           format: sarif
           output: trivy-results.sarif
           exit-code: "0"
 
       - name: Upload to Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        if: always() && inputs.upload-sarif && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: trivy-results.sarif
-          category: trivy-${{ inputs.scan-type }}
+          category: ${{ inputs.sarif-category != '' && inputs.sarif-category || format('trivy-{0}', inputs.scan-type) }}
+
+      - name: Keep report
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.sarif-category != '' && inputs.sarif-category || format('trivy-{0}', inputs.scan-type) }}-report
+          path: trivy-results.sarif
+          retention-days: 30
 
       - name: Fail on findings
         if: inputs.fail-on-findings
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ inputs.registry-username }}
           TRIVY_PASSWORD: ${{ secrets.registry-password }}
@@ -88,3 +109,4 @@ jobs:
           ignore-unfixed: ${{ inputs.ignore-unfixed }}
           format: table
           exit-code: "1"
+          skip-setup-trivy: true
