@@ -58,6 +58,7 @@ Ready-to-copy callers live in [`examples/`](examples):
 - **Secrets.** Pass secrets explicitly (as in the examples) rather than `secrets: inherit`, so each workflow only sees what it needs.
 - **Versioning.** Call `@v1` (a tag on this repo) rather than `@main`, so a change here does not break every repo at once.
   Pin to a commit SHA for production deploys of regulated services.
+- **Pinned actions.** Every third-party action inside these workflows is pinned to a commit SHA (with its version in a comment) and runs on Node 24. Dependabot proposes the bumps.
 - **Private repo access.** If this repository is private, enable
   *Settings → Actions → General → Access → "Accessible from repositories owned by the user"* so other repos can call it.
 
