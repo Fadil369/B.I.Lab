@@ -1,0 +1,217 @@
+# BrainSAIT reusable workflow: Android Gradle CI (Kotlin / Jetpack Compose / Multi-Module)
+#
+# Tailored for multi-module Android suites such as brainsait-clinical-android
+# (:core-fhir, :feature-bpr, :app-clinician, :app-patient) running on JDK 17/21 Temurin.
+#
+# Security guarantees:
+#   - Every third-party action is pinned to a full 40-char commit SHA (Node 24 majors).
+#   - Zero ${{ ... }} interpolation inside run: shell scripts; all inputs pass via env:.
+name: Android CI
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: Temurin JDK version to install (e.g. "17" or "21").
+        type: string
+        default: "17"
+      working-directory:
+        description: Relative path to the Gradle root project containing gradlew.
+        type: string
+        default: "."
+      gradle-test-tasks:
+        description: Whitespace-separated Gradle unit-test tasks (set "" to skip).
+        type: string
+        default: "testDebugUnitTest"
+      gradle-lint-tasks:
+        description: Whitespace-separated Android Lint tasks (set "" to skip).
+        type: string
+        default: "lintDebug"
+      gradle-assemble-tasks:
+        description: Whitespace-separated debug APK assemble tasks (set "" to skip).
+        type: string
+        default: "assembleDebug"
+      gradle-extra-args:
+        description: Extra safe Gradle CLI flags (e.g. "--stacktrace").
+        type: string
+        default: ""
+      apk-artifact-glob:
+        description: Glob (relative to working-directory) for built debug APKs to upload.
+        type: string
+        default: "**/build/outputs/apk/debug/*.apk"
+      artifact-retention-days:
+        description: Days to retain test, lint, and debug APK artifacts.
+        type: number
+        default: 14
+      timeout-minutes:
+        description: Maximum job runtime in minutes.
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Android Gradle CI
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Temurin JDK
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle with caching
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Prepare Android SDK licenses and Gradle wrapper
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -n "$sdk_dir" && -d "$sdk_dir" ]]; then
+            mkdir -p "$sdk_dir/licenses"
+            printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$sdk_dir/licenses/android-sdk-license"
+          fi
+          if [[ -f local.properties ]]; then
+            grep -v '^sdk\.dir=' local.properties > local.properties.ci || true
+            mv local.properties.ci local.properties
+          fi
+
+      - name: Run unit tests
+        if: inputs.gradle-test-tasks != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GRADLE_TASKS: ${{ inputs.gradle-test-tasks }}
+          GRADLE_EXTRA: ${{ inputs.gradle-extra-args }}
+        run: |
+          set -euo pipefail
+          read -r -a task_arr <<< "$GRADLE_TASKS"
+          read -r -a extra_arr <<< "$GRADLE_EXTRA"
+          for tok in "${task_arr[@]}" "${extra_arr[@]}"; do
+            [[ -z "$tok" ]] && continue
+            if [[ ! "$tok" =~ ^[A-Za-z0-9_:./=-]+$ ]]; then
+              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: $tok"
+              exit 2
+            fi
+          done
+          ./gradlew --no-daemon "${extra_arr[@]}" "${task_arr[@]}"
+
+      - name: Run Android Lint
+        if: inputs.gradle-lint-tasks != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GRADLE_TASKS: ${{ inputs.gradle-lint-tasks }}
+          GRADLE_EXTRA: ${{ inputs.gradle-extra-args }}
+        run: |
+          set -euo pipefail
+          read -r -a task_arr <<< "$GRADLE_TASKS"
+          read -r -a extra_arr <<< "$GRADLE_EXTRA"
+          for tok in "${task_arr[@]}" "${extra_arr[@]}"; do
+            [[ -z "$tok" ]] && continue
+            if [[ ! "$tok" =~ ^[A-Za-z0-9_:./=-]+$ ]]; then
+              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: $tok"
+              exit 2
+            fi
+          done
+          ./gradlew --no-daemon "${extra_arr[@]}" "${task_arr[@]}"
+
+      - name: Assemble debug APKs
+        if: inputs.gradle-assemble-tasks != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GRADLE_TASKS: ${{ inputs.gradle-assemble-tasks }}
+          GRADLE_EXTRA: ${{ inputs.gradle-extra-args }}
+        run: |
+          set -euo pipefail
+          read -r -a task_arr <<< "$GRADLE_TASKS"
+          read -r -a extra_arr <<< "$GRADLE_EXTRA"
+          for tok in "${task_arr[@]}" "${extra_arr[@]}"; do
+            [[ -z "$tok" ]] && continue
+            if [[ ! "$tok" =~ ^[A-Za-z0-9_:./=-]+$ ]]; then
+              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: $tok"
+              exit 2
+            fi
+          done
+          ./gradlew --no-daemon "${extra_arr[@]}" "${task_arr[@]}"
+
+      - name: Write build summary
+        if: always()
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          JAVA_VER: ${{ inputs.java-version }}
+          TEST_TASKS: ${{ inputs.gradle-test-tasks }}
+          LINT_TASKS: ${{ inputs.gradle-lint-tasks }}
+          ASSEMBLE_TASKS: ${{ inputs.gradle-assemble-tasks }}
+          APK_GLOB: ${{ inputs.apk-artifact-glob }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Android Gradle CI"
+            echo
+            echo "| Setting | Value |"
+            echo "|---|---|"
+            echo "| Temurin JDK | \`${JAVA_VER}\` |"
+            echo "| Unit test tasks | \`${TEST_TASKS:-skipped}\` |"
+            echo "| Lint tasks | \`${LINT_TASKS:-skipped}\` |"
+            echo "| Assemble tasks | \`${ASSEMBLE_TASKS:-skipped}\` |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import glob
+          import os
+
+          pattern = os.environ.get("APK_GLOB", "**/build/outputs/apk/debug/*.apk")
+          apks = sorted(glob.glob(pattern, recursive=True))
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as fh:
+              if apks:
+                  fh.write("### Built Debug APKs\n\n| APK | Size (bytes) |\n|---|---|\n")
+                  for apk in apks:
+                      fh.write(f"| `{apk}` | {os.path.getsize(apk):,} |\n")
+          PY
+
+      - name: Upload JUnit XML and HTML test reports
+        if: always() && inputs.gradle-test-tasks != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-unit-test-reports
+          path: |
+            ${{ inputs.working-directory }}/**/build/test-results/**/*.xml
+            ${{ inputs.working-directory }}/**/build/reports/tests/**
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: Upload Android Lint HTML and SARIF reports
+        if: always() && inputs.gradle-lint-tasks != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-lint-reports
+          path: |
+            ${{ inputs.working-directory }}/**/build/reports/lint-results*.html
+            ${{ inputs.working-directory }}/**/build/reports/lint-results*.sarif
+            ${{ inputs.working-directory }}/**/build/reports/lint-results*.xml
+            ${{ inputs.working-directory }}/**/build/reports/lint-results*.txt
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: Upload built debug APKs
+        if: inputs.gradle-assemble-tasks != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-debug-apks
+          path: ${{ inputs.working-directory }}/${{ inputs.apk-artifact-glob }}
+          if-no-files-found: warn
+          retention-days: ${{ inputs.artifact-retention-days }}

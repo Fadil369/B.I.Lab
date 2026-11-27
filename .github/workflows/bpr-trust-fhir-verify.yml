@@ -1,0 +1,121 @@
+# BrainSAIT reusable workflow: BPR X.509 PKI Trust & Synthetic FHIR R4 / NPHIES Verification
+#
+# Checks out the calling repository plus Fadil369/B.I.Lab script/bpr-verify, validates X.509
+# trust certificates (PEM/DER parsing, OpenSSL CA chain verification, certificate expiry horizon)
+# and synthetic FHIR R4 / NPHIES / BPR JSON contracts, appends a Markdown summary table to
+# $GITHUB_STEP_SUMMARY, and uploads the JSON verification report as an artifact.
+name: BPR Trust & FHIR Verify
+
+on:
+  workflow_call:
+    inputs:
+      trust-dir:
+        description: Relative directory in caller repo containing X.509 trust certs (set "" to skip PKI check).
+        type: string
+        default: "trust"
+      fhir-paths:
+        description: Space- or comma-separated paths of FHIR R4 / BPR JSON payloads (auto-discovers fhir and public/assets/bpr-data when empty).
+        type: string
+        default: ""
+      min-days:
+        description: Minimum days until X.509 certificate expiry before failing the build.
+        type: number
+        default: 30
+      require-trust:
+        description: Fail if trust-dir does not exist or contains no certificates.
+        type: boolean
+        default: true
+      require-fhir:
+        description: Fail if no FHIR/BPR JSON files are found in fhir-paths.
+        type: boolean
+        default: false
+      artifact-retention-days:
+        description: Days to retain the bpr-verify JSON report artifact.
+        type: number
+        default: 90
+      tools-ref:
+        description: Git ref of Fadil369/B.I.Lab to load script/bpr-verify from (default v1).
+        type: string
+        default: "v1"
+    secrets:
+      tools-token:
+        description: Optional token with read access to Fadil369/B.I.Lab (only needed if B.I.Lab is private).
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: BPR PKI & FHIR Governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out calling repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Check out bpr-verify tool from B.I.Lab
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Fadil369/B.I.Lab
+          ref: ${{ inputs.tools-ref }}
+          token: ${{ secrets.tools-token || github.token }}
+          path: tools
+          persist-credentials: false
+          sparse-checkout: script/bpr-verify
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify X.509 trust chain and FHIR / NPHIES / BPR schemas
+        env:
+          TRUST_DIR: ${{ inputs.trust-dir }}
+          FHIR_PATHS: ${{ inputs.fhir-paths }}
+          MIN_DAYS: ${{ inputs.min-days }}
+          REQUIRE_TRUST: ${{ inputs.require-trust }}
+          REQUIRE_FHIR: ${{ inputs.require-fhir }}
+        run: |
+          set -uo pipefail
+          cmd=(
+            python tools/script/bpr-verify/bpr_verify.py
+            --root src
+            --trust-dir "$TRUST_DIR"
+            --min-days "$MIN_DAYS"
+            --json-report bpr-verify-report.json
+            --markdown-summary "$GITHUB_STEP_SUMMARY"
+          )
+          if [[ "$REQUIRE_TRUST" == "true" && -n "$TRUST_DIR" ]]; then
+            cmd+=(--require-trust)
+          else
+            cmd+=(--no-require-trust)
+          fi
+          if [[ "$REQUIRE_FHIR" == "true" ]]; then
+            cmd+=(--require-fhir)
+          else
+            cmd+=(--no-require-fhir)
+          fi
+          if [[ -n "$FHIR_PATHS" ]]; then
+            cmd+=(--fhir-paths "$FHIR_PATHS")
+          fi
+          "${cmd[@]}"
+          status=$?
+          if [[ $status -ne 0 ]]; then
+            echo "::error title=BPR verification failed::bpr_verify.py reported trust or FHIR/BPR governance violations. Inspect the step summary and bpr-verify-report artifact."
+          fi
+          exit "$status"
+
+      - name: Upload BPR verification JSON report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bpr-verify-report
+          path: bpr-verify-report.json
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}

@@ -1,0 +1,61 @@
+# Example caller: multi-module Android BPR suite (e.g. Fadil369/brainsait-clinical-android).
+# Copy to .github/workflows/ci-and-release.yml (or split into ci.yml + release.yml).
+name: Android BPR CI & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-ci:
+    uses: Fadil369/B.I.Lab/.github/workflows/android-ci.yml@v1
+    permissions:
+      contents: read
+    with:
+      java-version: "17"
+      gradle-test-tasks: "testDebugUnitTest"
+      gradle-lint-tasks: "lintDebug"
+      gradle-assemble-tasks: ":app-clinician:assembleDebug :app-patient:assembleDebug"
+
+  healthcare-security:
+    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      codeql-languages: '["actions"]'
+      phi-fail-on: medium
+      upload-sarif: false   # set true on public repos or private repos with GitHub Advanced Security
+      tools-ref: v1
+
+  android-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android-ci, healthcare-security]
+    uses: Fadil369/B.I.Lab/.github/workflows/android-release.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      java-version: "17"
+      modules: ":app-clinician :app-patient"
+      suite-name: "brainsait-clinical-android"
+      fhir-version: "4.0.1"
+      nphies-profile: "ksa/nphies-fs"
+      create-release: true
+      attest: true
+      dispatch-repo: "Fadil369/fadil369.github.io"
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
