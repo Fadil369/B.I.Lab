@@ -1,0 +1,36 @@
+name: phi-scan tests
+
+on:
+  pull_request:
+    paths:
+      - 'script/phi-scan/**'
+      - '.github/workflows/phi-scan-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'script/phi-scan/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Unit tests and doctests
+        working-directory: script/phi-scan
+        run: |
+          python -m unittest -v test_phi_scan
+          python -m doctest -v phi_scan.py
+      - name: Self-scan (this repository must stay clean)
+        run: python script/phi-scan/phi_scan.py --root . --fail-on medium

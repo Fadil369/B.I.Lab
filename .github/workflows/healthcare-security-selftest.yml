@@ -1,0 +1,19 @@
+# Manual run of the reusable healthcare scan against this repository, to exercise it end to end.
+name: Healthcare security scan (self-test)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    uses: ./.github/workflows/healthcare-security-scan.yml
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      codeql-languages: '["actions","python"]'
+      tools-ref: ${{ github.sha }}

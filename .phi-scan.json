@@ -1,0 +1,5 @@
+{
+  "exclude_paths": [
+    "script/phi-scan/test_phi_scan.py"
+  ]
+}

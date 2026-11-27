@@ -1,0 +1,438 @@
+# Reusable security scan for healthcare repositories (HIPAA / NPHIES oriented).
+#
+# BRAINSAIT: Runs four independent checks and one gate job:
+#   1. secrets       - gitleaks over git history (or only the PR's commits)
+#   2. dependencies  - Trivy filesystem scan: vulnerable packages + IaC/Dockerfile misconfig
+#   3. container     - Trivy image scan (only when image-ref or dockerfile is given)
+#   4. codeql        - GitHub CodeQL static analysis (security-extended queries)
+#   5. phi           - phi-scan heuristics for possible PHI in code, fixtures and log calls
+#   gate             - one stable check name to require in branch protection
+#
+# These checks support, but do not prove, HIPAA or NPHIES compliance. Read
+# docs/healthcare-security-scan.md for what each check covers and cannot guarantee.
+#
+# Usage from another repository:
+#
+#   jobs:
+#     security:
+#       uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@main
+#       permissions:
+#         contents: read
+#         security-events: write
+#         actions: read
+#       with:
+#         codeql-languages: '["javascript-typescript","python","actions"]'
+#       secrets: inherit
+#
+# Every third-party action is pinned to a full commit SHA (tag in the trailing comment).
+# Supply-chain attacks on mutable action tags are a known risk; update SHAs deliberately.
+
+name: Healthcare security scan
+
+on:
+  workflow_call:
+    inputs:
+      run-secrets:
+        description: Run the gitleaks secret scan.
+        type: boolean
+        default: true
+      run-dependencies:
+        description: Run the Trivy filesystem scan (dependencies + misconfiguration).
+        type: boolean
+        default: true
+      run-codeql:
+        description: Run CodeQL. Needs GitHub Advanced Security on private repositories.
+        type: boolean
+        default: true
+      run-phi:
+        description: Run the phi-scan heuristics.
+        type: boolean
+        default: true
+      secrets-full-history:
+        description: On push/schedule, scan the whole git history. Pull requests always scan only the PR's commits.
+        type: boolean
+        default: true
+      trivy-severity:
+        description: Trivy severities that fail the build (comma separated).
+        type: string
+        default: CRITICAL,HIGH
+      trivy-ignore-unfixed:
+        description: Do not fail on vulnerabilities that have no fixed version yet.
+        type: boolean
+        default: true
+      image-ref:
+        description: Existing container image to scan (e.g. ghcr.io/org/app:sha). Leave empty to skip, or use dockerfile.
+        type: string
+        default: ''
+      dockerfile:
+        description: Path to a Dockerfile to build locally and scan. Ignored when image-ref is set.
+        type: string
+        default: ''
+      docker-context:
+        description: Build context for dockerfile.
+        type: string
+        default: '.'
+      codeql-languages:
+        description: JSON array of CodeQL languages, e.g. '["javascript-typescript","python","actions"]'.
+        type: string
+        default: '["actions"]'
+      codeql-queries:
+        description: CodeQL query suite (security-extended or security-and-quality).
+        type: string
+        default: security-extended
+      phi-fail-on:
+        description: Lowest phi-scan severity that fails the build (low, medium, high, none).
+        type: string
+        default: medium
+      phi-config:
+        description: Path to the phi-scan JSON config in the calling repository.
+        type: string
+        default: .phi-scan.json
+      upload-sarif:
+        description: Upload results to GitHub code scanning. Set false on private repos without Advanced Security.
+        type: boolean
+        default: true
+      artifact-retention-days:
+        description: Days to keep the raw reports as workflow artifacts (max set by the org/repo).
+        type: number
+        default: 90
+      tools-ref:
+        description: Git ref of Fadil369/B.I.Lab to load phi-scan from. Pin to a tag or SHA in production.
+        type: string
+        default: main
+    secrets:
+      tools-token:
+        description: Token with read access to Fadil369/B.I.Lab. Only needed while that repository is private.
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthcare-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    if: inputs.run-secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Scan for secrets
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FULL_HISTORY: ${{ inputs.secrets-full-history }}
+        run: |
+          set -uo pipefail
+          args=(git --redact --no-banner --exit-code 1
+                --report-format sarif --report-path gitleaks.sarif)
+          if [[ "$EVENT" == "pull_request" || "$EVENT" == "pull_request_target" ]]; then
+            args+=(--log-opts "--no-merges ${BASE_SHA}..${HEAD_SHA}")
+            echo "Scanning PR commits ${BASE_SHA}..${HEAD_SHA}"
+          elif [[ "$FULL_HISTORY" != "true" ]]; then
+            args+=(--log-opts "-1")
+            echo "Scanning the latest commit only"
+          else
+            echo "Scanning full history"
+          fi
+          "$RUNNER_TEMP/gitleaks" "${args[@]}" .
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [[ $status -eq 1 ]]; then
+            echo "::error title=Secrets found::gitleaks found possible secrets. Rotate them first, then remove them from history."
+          fi
+          exit $status
+
+      - name: Upload SARIF
+        if: always() && inputs.upload-sarif && hashFiles('gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+      - name: Keep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitleaks-report
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  dependencies:
+    name: Dependencies and IaC (Trivy fs)
+    if: inputs.run-dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trivy report (all severities, SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: '0'
+
+      - name: Upload SARIF
+        if: always() && inputs.upload-sarif && hashFiles('trivy-fs.sarif') != ''
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          format: table
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+          exit-code: '1'
+          skip-setup-trivy: true
+
+      - name: Keep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-fs-report
+          path: trivy-fs.sarif
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  container:
+    name: Container image (Trivy image)
+    if: inputs.image-ref != '' || inputs.dockerfile != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve image
+        id: image
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.docker-context }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$IMAGE_REF" ]]; then
+            echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+          else
+            tag="healthcare-scan-local:${GITHUB_SHA::12}"
+            docker build --pull -f "$DOCKERFILE" -t "$tag" "$CONTEXT"
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trivy report (all severities, SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy-image.sarif
+          exit-code: '0'
+
+      - name: Upload SARIF
+        if: always() && inputs.upload-sarif && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Trivy gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          scanners: vuln,secret,misconfig
+          format: table
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+          exit-code: '1'
+          skip-setup-trivy: true
+
+      - name: Keep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-image-report
+          path: trivy-image.sarif
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    if: inputs.run-codeql && inputs.codeql-languages != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.codeql-languages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          languages: ${{ matrix.language }}
+          queries: ${{ inputs.codeql-queries }}
+
+      # Compiled languages use autobuild. Repos that need a custom build should call
+      # CodeQL directly instead of this reusable job.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          category: codeql-${{ matrix.language }}
+          upload: ${{ inputs.upload-sarif && 'always' || 'never' }}
+
+  phi:
+    name: Possible PHI (phi-scan)
+    if: inputs.run-phi
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Check out phi-scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Fadil369/B.I.Lab
+          ref: ${{ inputs.tools-ref }}
+          token: ${{ secrets.tools-token || github.token }}
+          path: tools
+          persist-credentials: false
+          sparse-checkout: script/phi-scan
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Scan for possible PHI
+        env:
+          FAIL_ON: ${{ inputs.phi-fail-on }}
+          PHI_CONFIG: ${{ inputs.phi-config }}
+        run: |
+          set -uo pipefail
+          python tools/script/phi-scan/phi_scan.py \
+            --root src \
+            --config "src/${PHI_CONFIG}" \
+            --fail-on "$FAIL_ON" \
+            --sarif phi-scan.sarif | tee phi-scan.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo '### phi-scan'
+            echo
+            echo '```'
+            tail -n 20 phi-scan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ $status -eq 1 ]]; then
+            echo "::error title=Possible PHI::phi-scan found possible PHI at or above '${FAIL_ON}'. Confirm each value is synthetic, then fix or mark it with phi-scan:ignore <reason>."
+          fi
+          exit $status
+
+      - name: Upload SARIF
+        if: always() && inputs.upload-sarif && hashFiles('phi-scan.sarif') != ''
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: phi-scan.sarif
+          checkout_path: ${{ github.workspace }}/src
+          category: phi-scan
+
+      - name: Keep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phi-scan-report
+          path: |
+            phi-scan.sarif
+            phi-scan.txt
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  gate:
+    name: Healthcare security gate
+    if: always()
+    needs: [secrets, dependencies, container, codeql, phi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Summarize and enforce
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Healthcare security scan'
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "$RESULTS" | jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"'
+            echo
+            echo 'Passing these checks does not by itself demonstrate HIPAA or NPHIES compliance.'
+            echo 'See docs/healthcare-security-scan.md in Fadil369/B.I.Lab for coverage and limits.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [[ -n "$failed" ]]; then
+            echo "::error title=Healthcare security gate::Failed checks: $failed"
+            exit 1
+          fi
