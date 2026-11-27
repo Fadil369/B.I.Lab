@@ -1,5 +1,7 @@
 # BrainSAIT reusable workflow: CodeQL static analysis
 # Runs GitHub CodeQL for one or more languages and uploads results to the Security tab.
+#
+# Actions are pinned to full commit SHAs (tag in the trailing comment).
 name: CodeQL
 
 on:
@@ -17,6 +19,14 @@ on:
         description: Optional path to a CodeQL config file in the caller repo
         type: string
         default: ""
+      build-mode:
+        description: none (no build) or autobuild. Go and Swift need autobuild; repos needing a manual build should run CodeQL themselves.
+        type: string
+        default: none
+      upload-sarif:
+        description: Upload results to code scanning. Set false on private repos without GitHub Advanced Security.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -25,6 +35,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       security-events: write
@@ -35,15 +46,18 @@ jobs:
       matrix:
         language: ${{ fromJSON(inputs.languages) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ inputs.build-mode }}
           queries: ${{ inputs.queries }}
           config-file: ${{ inputs.config-file }}
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           category: /language:${{ matrix.language }}
+          upload: ${{ inputs.upload-sarif && 'always' || 'never' }}

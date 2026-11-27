@@ -18,12 +18,13 @@ so a product repo calls it in a few lines instead of copying CI logic around.
 | [`cloudflare-pages-deploy.yml`](.github/workflows/cloudflare-pages-deploy.yml) | Build and `wrangler pages deploy`; PRs get a preview on their branch alias | `project-name`, `output-directory`, `build-command` |
 | [`github-pages-deploy.yml`](.github/workflows/github-pages-deploy.yml) | Optional build, then publish a folder to GitHub Pages | `path`, `build-command` |
 | [`claude-code.yml`](.github/workflows/claude-code.yml) | Claude Code: answers `@claude` mentions, or reviews PRs with the code-review plugin | `mode` (mention/review); secret `CLAUDE_CODE_OAUTH_TOKEN` |
-| [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL analysis per language, results in the Security tab | `languages` (JSON array), `queries` |
-| [`trivy-scan.yml`](.github/workflows/trivy-scan.yml) | Trivy vuln / secret / misconfig scan of the repo or an image, SARIF to the Security tab | `scan-type` (fs/image/config), `scan-ref`, `severity`, `fail-on-findings` |
+| [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL analysis per language, results in the Security tab | `languages` (JSON array), `queries`, `build-mode`, `upload-sarif` |
+| [`trivy-scan.yml`](.github/workflows/trivy-scan.yml) | Trivy vuln / secret / misconfig scan of the repo or an image, SARIF to the Security tab | `scan-type` (fs/image/config), `scan-ref`, `severity`, `fail-on-findings`, `upload-sarif` |
+| [`healthcare-security-scan.yml`](.github/workflows/healthcare-security-scan.yml) | HIPAA/NPHIES-oriented bundle: gitleaks history scan, Trivy (repo + image), CodeQL, and `phi-scan` for possible PHI (Saudi ID/Iqama, MRN, DOB, FHIR Patient, HL7, PHI in log calls), behind one gate check. [Coverage and limits](docs/healthcare-security-scan.md) | `codeql-languages`, `image-ref` / `dockerfile`, `phi-fail-on`, `upload-sarif`; secret `tools-token` |
 | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Blocks PRs that add vulnerable or copyleft-licensed dependencies | `fail-on-severity`, `deny-licenses` |
 | [`fhir-validate.yml`](.github/workflows/fhir-validate.yml) | **Experimental.** HL7 FHIR R4 validator over test fixtures, optional IGs (e.g. NPHIES packages) | `path`, `fhir-version`, `implementation-guides` |
 
-`library-lint.yml` is this repo's own CI (actionlint over every workflow and example). It is not meant to be called.
+`library-lint.yml`, `phi-scan-tests.yml` and `healthcare-security-selftest.yml` are this repo's own CI. They are not meant to be called.
 
 ## Usage
 
@@ -47,6 +48,7 @@ Ready-to-copy callers live in [`examples/`](examples):
 - [`github-pages-site.yml`](examples/github-pages-site.yml): static site such as `fadil369.github.io`
 - [`static-site.yml`](examples/static-site.yml): site quality gate + CodeQL + Claude mention/review, as used by `fadil369.github.io`
 - [`security.yml`](examples/security.yml): CodeQL + Trivy + dependency review for any repo
+- [`healthcare-security.yml`](examples/healthcare-security.yml): the healthcare bundle (secrets, dependencies, image, CodeQL, possible PHI) for repos that touch patient or claims data
 - [`fhir-fixtures.yml`](examples/fhir-fixtures.yml): FHIR validation of example resources
 
 ### Notes for callers
@@ -67,6 +69,8 @@ These workflows are CI/CD plumbing; they do not make an app compliant on their o
 - Images ship with SBOM and build provenance, and Trivy checks for leaked secrets and misconfigurations.
 - Deploys run behind GitHub Environments, so production can require approval and keep an audit trail of who deployed what.
 - **Never put PHI in a repository, workflow log, artifact or test fixture.** `fhir-validate.yml` is for synthetic data only.
+- [`healthcare-security-scan.yml`](.github/workflows/healthcare-security-scan.yml) adds secret-history scanning and a heuristic check for possible PHI. Read [what it covers and cannot guarantee](docs/healthcare-security-scan.md) before relying on it.
+- Security tooling (`trivy-scan.yml`, `codeql.yml`, the healthcare scan) pins third-party actions to commit SHAs, because a hijacked tag on a scanner runs with `security-events: write`.
 
 ## Origin
 
