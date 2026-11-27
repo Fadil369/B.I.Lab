@@ -13,7 +13,7 @@
 # docs/healthcare-security-scan.md for what each check covers and cannot guarantee.
 # Example caller: examples/healthcare-security.yml
 #
-# Nested library workflows are called by full path at @main until the v1 tag exists.
+# Nested library workflows are called by full path at @v1.
 # Third-party actions are pinned to commit SHAs (tag in the trailing comment).
 name: Healthcare Security Scan
 
@@ -181,7 +181,7 @@ jobs:
   dependencies:
     name: Dependencies and IaC
     if: inputs.run-dependencies
-    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@main
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@v1
     permissions:
       contents: read
       security-events: write
@@ -199,7 +199,7 @@ jobs:
   image:
     name: Container image
     if: inputs.image-ref != ''
-    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@main
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@v1
     permissions:
       contents: read
       security-events: write
@@ -284,7 +284,7 @@ jobs:
   codeql:
     name: CodeQL
     if: inputs.run-codeql && inputs.codeql-languages != '[]'
-    uses: Fadil369/B.I.Lab/.github/workflows/codeql.yml@main
+    uses: Fadil369/B.I.Lab/.github/workflows/codeql.yml@v1
     permissions:
       contents: read
       security-events: write
