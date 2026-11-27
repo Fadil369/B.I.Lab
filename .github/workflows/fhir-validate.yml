@@ -96,9 +96,7 @@ jobs:
           FHIR_VERSION: ${{ inputs.fhir-version }}
           IGS: ${{ inputs.implementation-guides }}
         run: |
-          set -f
-          read -r -a ig_list <<< "$IGS"
-          set +f
+          mapfile -t ig_list < <(python3 -c 'import shlex,sys; sys.stdout.write("\n".join(shlex.split(sys.argv[1])))' "$IGS")
           ig_args=()
           for ig in "${ig_list[@]}"; do
             ig_args+=(-ig "$ig")

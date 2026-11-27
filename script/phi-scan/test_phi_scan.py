@@ -152,6 +152,25 @@ class TestDetectors(ScanCase):
         phi008 = [item for item in f if item.rule.id == "PHI008"]
         self.assertEqual(len(phi008), 12)
 
+    def test_log_phi008_avoids_prose_and_config_false_positives(self):
+        kotlin_src = "\n".join([
+            'Log.i(TAG, "Sync complete. NPHIES client ready")',
+            'Log.i(TAG, "SCFHS: initialized")',
+            'Log.d(TAG, "base " + config.nphiesBaseUrl)',
+            'Log.d(TAG, "run 20-11-27-2026 done")',
+        ]) + "\n"
+        f, _ = self.scan({"Safe.kt": kotlin_src})
+        self.assertEqual([x for x in f if x.rule.id == "PHI008"], [])
+
+    def test_log_phi008_still_flags_assignments_and_member_access(self):
+        kotlin_src = "\n".join([
+            'Log.i(TAG, "scfhs: 1234567")',
+            'Log.i(TAG, "scfhs=$value")',
+            'Log.d(TAG, "who " + clinician.scfhs)',
+        ]) + "\n"
+        f, _ = self.scan({"Leaky.kt": kotlin_src})
+        self.assertEqual(len([x for x in f if x.rule.id == "PHI008"]), 3)
+
     def test_fhir_patient_outside_synthetic(self):
         res = json.dumps({"resourceType": "Patient", "birthDate": "1990-01-01"})
         f, _ = self.scan({"fixtures/p.json": res, "fixtures/synthetic/p.json": res})

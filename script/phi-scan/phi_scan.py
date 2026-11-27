@@ -101,13 +101,13 @@ LOG_SENSITIVE_FIELD = re.compile(
     r"date_?of_?birth|birth_?date|diagnos|beneficiary|member_?id|insurance_?(no|number|id)|"
     r"full_?name|first_?name|last_?name|phone|mobile|email|address|\biban\b|"
     r"scfhs[_ -]?(?:license|licence|id|no|num|number|reg\w*|code|cert\w*)|"
-    r"\bscfhs\s*[:=$]|\.\s*scfhs\b|\$\{?scfhs\w*|\b\d{2}-[A-Z0-9]{1,3}-[A-Z0-9]{1,3}-\d{4,10}\b|"
+    r"\bscfhs\s*(?:=|\$|:\s*[\"\'\d${])|\.scfhs\b|\$\{?scfhs\w*|\b\d{2}-[A-Z]{1,3}-[A-Z]{1,3}-\d{4,10}\b|"
     r"practitioner[_ -]?(?:license|licence|id)|clinician[_ -]?(?:license|licence|id)|"
     r"license[_ -]?(?:no|num|number)|licence[_ -]?(?:no|num|number)|"
     r"nphies[_ -./]?(?:id|identifier|member\w*|beneficiar\w*|subscriber\w*|patient\w*|"
     r"claim\w*|coverage\w*|policy\w*|payer\w*|provider\w*|practitioner\w*|license\w*|"
     r"licence\w*|preauth\w*|episode\w*|no|num|number|ref\w*|token\w*|secret\w*|bundle\w*|payload\w*)|"
-    r"nphies\.sa/(?:license|identifier)/\S+|\bnphies\s*[:=$]|\.\s*nphies\w*|\$\{?nphies\w*)"
+    r"nphies\.sa/(?:license|identifier)/\S+|\bnphies\s*(?:=|\$|:\s*[\"\'\d${])|\.nphies\b|\$\{?nphies\w*)"
 )
 
 KNOWN_TEST_SSNS = {"078-05-1120", "123-45-6789", "219-09-9999", "457-55-5462"}

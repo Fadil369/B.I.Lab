@@ -24,6 +24,10 @@ on:
         description: Build command. Empty skips install and build (plain static files).
         type: string
         default: npm ci && npm run build
+      wrangler-version:
+        description: Exact wrangler version to run (pinned; it runs with the Cloudflare API token).
+        type: string
+        default: "4.169.0"
       github-environment:
         type: string
         default: production
@@ -73,10 +77,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OUTPUT_DIR: ${{ inputs.output-directory }}
           PROJECT_NAME: ${{ inputs.project-name }}
+          WRANGLER_VERSION: ${{ inputs.wrangler-version }}
           HEAD_REF: ${{ github.head_ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if [[ ! "$WRANGLER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::wrangler-version must be an exact version like 4.169.0"
+            exit 1
+          fi
           branch="${HEAD_REF:-$REF_NAME}"
           upload_dir="$OUTPUT_DIR"
           if [[ "$upload_dir" == -* ]]; then
@@ -85,7 +94,7 @@ jobs:
           out_dir="$RUNNER_TEMP/wrangler-output"
           mkdir -p "$out_dir"
           export WRANGLER_OUTPUT_FILE_DIRECTORY="$out_dir"
-          npx --yes wrangler@4 pages deploy "$upload_dir" \
+          npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$upload_dir" \
             --project-name="$PROJECT_NAME" \
             --branch="$branch" | tee "$RUNNER_TEMP/wrangler.log"
           url=""

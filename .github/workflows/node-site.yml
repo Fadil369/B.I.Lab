@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       audit-level:
-        description: npm audit threshold (low, moderate, high, critical). Empty skips the audit.
+        description: npm audit threshold (info, low, moderate, high, critical, none). Empty skips the audit.
         type: string
         default: high
       timeout-minutes:
@@ -104,11 +104,11 @@ jobs:
           AUDIT_LEVEL: ${{ inputs.audit-level }}
         run: |
           case "$AUDIT_LEVEL" in
-            info|low|moderate|high|critical)
+            info|low|moderate|high|critical|none)
               npm audit --include=dev --audit-level="$AUDIT_LEVEL"
               ;;
             *)
-              echo "::error::Invalid audit-level '$AUDIT_LEVEL' (expected low, moderate, high, or critical)"
+              echo "::error::Invalid audit-level '$AUDIT_LEVEL' (expected info, low, moderate, high, critical, or none)"
               exit 1
               ;;
           esac

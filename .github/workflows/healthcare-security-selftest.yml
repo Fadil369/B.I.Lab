@@ -16,4 +16,5 @@ jobs:
       actions: read
       packages: read
     with:
+      tools-ref: ${{ github.sha }}
       codeql-languages: '["actions","python"]'
