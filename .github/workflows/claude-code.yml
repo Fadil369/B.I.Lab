@@ -34,7 +34,7 @@ jobs:
           echo "::error::mode must be 'mention' or 'review'"
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
