@@ -1,0 +1,57 @@
+# BrainSAIT reusable workflow: Claude Code
+# mode: mention -> answers @claude in issues and PRs
+# mode: review  -> automatic PR review with the code-review plugin (inline comments)
+# The caller owns the trigger (`on:` / `if:`) and must grant the permissions below.
+name: Claude Code
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: mention or review
+        type: string
+        default: mention
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Check mode
+        if: inputs.mode != 'mention' && inputs.mode != 'review'
+        run: |
+          echo "::error::mode must be 'mention' or 'review'"
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Claude (mention)
+        if: inputs.mode == 'mention'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+
+      - name: Claude (PR review)
+        if: inputs.mode == 'review'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: https://github.com/anthropics/claude-code.git
+          plugins: code-review@claude-code-plugins
+          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          claude_args: --allowedTools "mcp__github_inline_comment__create_inline_comment"

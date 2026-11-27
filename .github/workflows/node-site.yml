@@ -1,0 +1,93 @@
+# BrainSAIT reusable workflow: Node site quality gate
+# Install, then run caller-supplied command lists, with optional PHP and
+# Playwright Chromium stages and an npm audit. Callers decide what "green" means.
+name: Node Site Quality
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+      install-command:
+        type: string
+        default: npm ci --include=dev
+      pre-browser-commands:
+        description: Newline-separated commands (build, unit tests, checks) run before any browser install
+        type: string
+        required: true
+      php-version:
+        description: PHP version (e.g. 8.3). Empty skips the PHP stage.
+        type: string
+        default: ""
+      php-extensions:
+        description: Comma-separated PHP extensions (e.g. pdo_sqlite, curl, mbstring)
+        type: string
+        default: ""
+      php-commands:
+        description: Newline-separated commands run after PHP is set up
+        type: string
+        default: ""
+      browser-commands:
+        description: Newline-separated commands that need Playwright Chromium. Empty skips the install.
+        type: string
+        default: ""
+      audit-level:
+        description: npm audit threshold (low, moderate, high, critical). Empty skips the audit.
+        type: string
+        default: high
+      timeout-minutes:
+        type: number
+        default: 15
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install
+        run: ${{ inputs.install-command }}
+
+      - name: Build and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ inputs.pre-browser-commands }}
+
+      - if: inputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+
+      - name: PHP checks
+        if: inputs.php-version != '' && inputs.php-commands != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ inputs.php-commands }}
+
+      - name: Install Playwright Chromium
+        if: inputs.browser-commands != ''
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser checks
+        if: inputs.browser-commands != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ inputs.browser-commands }}
+
+      - name: npm audit
+        if: inputs.audit-level != ''
+        run: npm audit --include=dev --audit-level=${{ inputs.audit-level }}
