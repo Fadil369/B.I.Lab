@@ -23,8 +23,11 @@ so a product repo calls it in a few lines instead of copying CI logic around.
 | [`healthcare-security-scan.yml`](.github/workflows/healthcare-security-scan.yml) | HIPAA/NPHIES-oriented bundle: gitleaks history scan, Trivy (repo + image), CodeQL, and `phi-scan` for possible PHI (Saudi ID/Iqama, MRN, DOB, FHIR Patient, HL7, PHI in log calls), behind one gate check. [Coverage and limits](docs/healthcare-security-scan.md) | `codeql-languages`, `image-ref` / `dockerfile`, `phi-fail-on`, `upload-sarif`; secret `tools-token` |
 | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Blocks PRs that add vulnerable or copyleft-licensed dependencies | `fail-on-severity`, `deny-licenses` |
 | [`fhir-validate.yml`](.github/workflows/fhir-validate.yml) | **Experimental.** HL7 FHIR R4 validator over test fixtures, optional IGs (e.g. NPHIES packages) | `path`, `fhir-version`, `implementation-guides` |
+| [`android-ci.yml`](.github/workflows/android-ci.yml) | Gradle CI for Kotlin / Jetpack Compose multi-module Android apps: unit tests, lint, debug APK assembly; reports and APKs uploaded as artifacts | `java-version`, `working-directory`, `gradle-test-tasks`, `gradle-lint-tasks`, `gradle-assemble-tasks`, `artifact-suffix` |
+| [`android-release.yml`](.github/workflows/android-release.yml) | Release APK build with optional keystore signing, build provenance attestation, GitHub Release, and optional dispatch of release metadata to an ecosystem hub repo | `modules`, `gradle-release-tasks`, `suite-name`, `create-release`, `dispatch-repo`; keystore and `DISPATCH_TOKEN` secrets |
+| [`bpr-trust-fhir-verify.yml`](.github/workflows/bpr-trust-fhir-verify.yml) | BPR X.509 PKI trust check (chain, expiry horizon) plus synthetic FHIR R4 / NPHIES and trust-governance verification via `script/bpr-verify` | `trust-dir`, `fhir-paths`, `min-days`, `require-trust`, `require-fhir`, `tools-ref`, `artifact-suffix` |
 
-`library-lint.yml`, `phi-scan-tests.yml` and `healthcare-security-selftest.yml` are this repo's own CI. They are not meant to be called.
+`library-lint.yml`, `phi-scan-tests.yml`, `bpr-verify-tests.yml` and `healthcare-security-selftest.yml` are this repo's own CI, and `release-tag-sync.yml` moves the floating `v1` tag when a `vX.Y.Z` tag is pushed. They are not meant to be called.
 
 ## Usage
 

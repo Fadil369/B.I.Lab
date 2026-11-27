@@ -14,7 +14,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync-major-tag:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Update floating major tag and ensure GitHub Release
         env:
@@ -39,13 +39,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git fetch --tags --force origin
+          # Credentials are not persisted by checkout; pass the token per command instead.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth"
+          gitx() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" "$@"; }
+          gitx fetch --tags --force origin
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ -n "$DISPATCH_TAG" ]]; then
               sem_tag="$DISPATCH_TAG"
             else
-              sem_tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+              sem_tag="$(git tag -l 'v*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n 1)"
             fi
           else
             sem_tag="$REF_NAME"
@@ -63,7 +67,7 @@ jobs:
           fi
 
           # Only move the floating major tag if sem_tag is the highest release in this major line
-          highest_in_major="$(git tag -l "${major_tag}.*.*" --sort=-v:refname | head -n 1)"
+          highest_in_major="$(git tag -l "${major_tag}.*" | { grep -E "^${major_tag}\.[0-9]+\.[0-9]+$" || true; } | sort -V | tail -n 1)"
           if [[ -n "$highest_in_major" && "$highest_in_major" != "$sem_tag" ]]; then
             echo "::notice title=Older patch tag::${sem_tag} is older than ${highest_in_major}; keeping ${major_tag} at ${highest_in_major}."
             sync_target="$highest_in_major"
@@ -76,7 +80,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -fa "$major_tag" -m "B.I.Lab ${major_tag} (${sync_target})" "$sync_sha"
-          git push origin "refs/tags/${major_tag}" --force
+          gitx push origin "refs/tags/${major_tag}" --force
 
           if gh release view "$sem_tag" --repo "$REPO" >/dev/null 2>&1; then
             echo "GitHub Release ${sem_tag} already exists."

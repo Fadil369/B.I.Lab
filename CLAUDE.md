@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 BrainSAIT reusable GitHub Actions workflow library (`Fadil369/B.I.Lab`). No app code or build system. Docs are bilingual EN/AR, no emojis, guesses marked `[guess]`.
 
 ## Layout
-- `.github/workflows/`: 14 reusable workflows (`on: workflow_call`) plus 3 repo-internal CI files (`library-lint.yml`, `phi-scan-tests.yml`, `healthcare-security-selftest.yml`) that are not callable.
+- `.github/workflows/`: 16 reusable workflows (`on: workflow_call`) plus 5 repo-internal files that are not callable (`library-lint.yml`, `phi-scan-tests.yml`, `bpr-verify-tests.yml`, `healthcare-security-selftest.yml`, `release-tag-sync.yml`).
 - `examples/`: caller workflows, linted in CI.
 - `script/phi-scan/`: stdlib-only PHI heuristic scanner and its tests.
 - `projects/`: git submodules, pointers only.

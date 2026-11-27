@@ -76,6 +76,14 @@ VALID_FHIR_R4_RESOURCES = frozenset({
     "Substance", "SupplyDelivery", "SupplyRequest", "Task", "ValueSet", "VisionPrescription",
 })
 
+# Additional valid FHIR R4 resource types (the base list above is not exhaustive).
+VALID_FHIR_R4_RESOURCES = VALID_FHIR_R4_RESOURCES | frozenset({
+    "Group", "DeviceRequest", "DeviceMetric", "DeviceUseStatement", "Contract",
+    "EnrollmentRequest", "EnrollmentResponse", "ImmunizationRecommendation",
+    "ImmunizationEvaluation", "ResearchStudy", "ResearchSubject", "MedicationKnowledge",
+    "TestReport", "StructureMap",
+})
+
 VALID_BUNDLE_TYPES = frozenset({
     "document", "message", "transaction", "transaction-response",
     "batch", "batch-response", "history", "searchset", "collection",
@@ -107,6 +115,9 @@ ALLOWED_WEB_TRUST_VALUES = {
 ALLOWED_WEB_VERIFICATION_VALUES = frozenset({
     "verified", "current", "confirmed", "not_assessed", "none", "expired", "revoked",
 })
+
+# Metadata fields inside a `verification` object (timestamps, actors, links) are not status values.
+NON_STATUS_VERIFICATION_SUFFIXES = ("at", "date", "time", "timestamp", "by", "source", "note", "notes", "url", "id")
 
 FORBIDDEN_NON_NEUTRAL_TRUST_TERMS = frozenset({
     "untrusted", "unverified", "fake", "fraud", "fraudulent",
@@ -485,48 +496,69 @@ def _check_saudi_identifier(
         )
 
 
-def _check_unmasked_phi_in_strings(obj: Any, rel_path: str, in_patient_scope: bool, report: VerificationReport) -> None:
+def _scan_string_for_phi(
+    val: str, key: str, phone_context: bool, patient_scope: bool, rel_path: str, report: VerificationReport
+) -> None:
+    stripped = val.strip()
+    for ssn_match in SSN_RE.finditer(stripped):
+        ssn = ssn_match.group(0)
+        if ssn not in KNOWN_TEST_SSNS and not ssn.startswith("987-65-432"):
+            report.add_error(
+                "phi",
+                rel_path,
+                "BPR-PHI-001",
+                f"Possible unmasked US SSN '{mask_value(ssn)}' in field '{key}'",
+            )
+    if patient_scope and EMAIL_RE.match(stripped):
+        if not SAFE_SYNTHETIC_EMAIL_DOMAINS.search(stripped):
+            report.add_error(
+                "phi",
+                rel_path,
+                "BPR-PHI-002",
+                f"Unmasked non-synthetic email '{mask_value(stripped)}' on patient payload",
+            )
+    compact_phone = re.sub(r"[\s()-]", "", stripped)
+    if (patient_scope or phone_context) and SA_MOBILE_RE.match(compact_phone):
+        if not is_synthetic_phone(compact_phone):
+            report.add_error(
+                "phi",
+                rel_path,
+                "BPR-PHI-003",
+                f"Unmasked non-synthetic Saudi mobile '{mask_value(stripped)}' in field '{key}'",
+            )
+
+
+def _check_unmasked_phi_in_strings(
+    obj: Any, rel_path: str, in_patient_scope: bool, report: VerificationReport,
+    parent_key: str = "", parent_phone_context: bool = False,
+) -> None:
     if isinstance(obj, dict):
         next_patient_scope = in_patient_scope or (
             obj.get("resourceType") == "Patient" or "patient_name_en" in obj
         )
+        # FHIR ContactPoint: {"system": "phone", "value": "..."}; a bare "value" key elsewhere
+        # (identifiers, licence numbers) is not a phone number.
+        contact_point_is_phone = str(obj.get("system", "")).lower() in {"phone", "sms"}
         for key, val in obj.items():
             key_lower = str(key).lower()
+            phone_context = key_lower in {"phone", "mobile", "telecom"} or (
+                key_lower == "value" and contact_point_is_phone
+            )
             if isinstance(val, str):
-                stripped = val.strip()
-                for ssn_match in SSN_RE.finditer(stripped):
-                    ssn = ssn_match.group(0)
-                    if ssn not in KNOWN_TEST_SSNS and not ssn.startswith("987-65-432"):
-                        report.add_error(
-                            "phi",
-                            rel_path,
-                            "BPR-PHI-001",
-                            f"Possible unmasked US SSN '{mask_value(ssn)}' in field '{key}'",
-                        )
-                if next_patient_scope and EMAIL_RE.match(stripped):
-                    if not SAFE_SYNTHETIC_EMAIL_DOMAINS.search(stripped):
-                        report.add_error(
-                            "phi",
-                            rel_path,
-                            "BPR-PHI-002",
-                            f"Unmasked non-synthetic email '{mask_value(stripped)}' on patient payload",
-                        )
-                compact_phone = re.sub(r"[\s()-]", "", stripped)
-                if (next_patient_scope or key_lower in {"phone", "mobile", "telecom", "value"}) and SA_MOBILE_RE.match(
-                    compact_phone
-                ):
-                    if not is_synthetic_phone(compact_phone):
-                        report.add_error(
-                            "phi",
-                            rel_path,
-                            "BPR-PHI-003",
-                            f"Unmasked non-synthetic Saudi mobile '{mask_value(stripped)}' in field '{key}'",
-                        )
+                _scan_string_for_phi(val, str(key), phone_context, next_patient_scope, rel_path, report)
             else:
-                _check_unmasked_phi_in_strings(val, rel_path, next_patient_scope, report)
+                _check_unmasked_phi_in_strings(
+                    val, rel_path, next_patient_scope, report, parent_key=str(key), parent_phone_context=phone_context
+                )
     elif isinstance(obj, list):
         for item in obj:
-            _check_unmasked_phi_in_strings(item, rel_path, in_patient_scope, report)
+            if isinstance(item, str):
+                _scan_string_for_phi(item, parent_key, parent_phone_context, in_patient_scope, rel_path, report)
+            else:
+                _check_unmasked_phi_in_strings(
+                    item, rel_path, in_patient_scope, report,
+                    parent_key=parent_key, parent_phone_context=parent_phone_context,
+                )
 
 
 def validate_fhir_resource(obj: dict[str, Any], rel_path: str, report: VerificationReport) -> None:
@@ -647,6 +679,8 @@ def validate_bpr_provider_record(obj: dict[str, Any], rel_path: str, report: Ver
     if isinstance(ver_obj, dict):
         for v_key, v_val in ver_obj.items():
             _check_neutral_trust_term(v_val, f"verification.{v_key}", rel_path, report)
+            if str(v_key).lower().endswith(NON_STATUS_VERIFICATION_SUFFIXES):
+                continue
             if not isinstance(v_val, str) or v_val not in ALLOWED_WEB_VERIFICATION_VALUES:
                 report.add_error(
                     "bpr",
@@ -667,6 +701,16 @@ def validate_json_file(json_path: Path, root: Path, report: VerificationReport) 
 
     report.json_files_checked += 1
     _check_unmasked_phi_in_strings(data, rel, in_patient_scope=False, report=report)
+    validate_json_document(data, rel, report)
+
+
+def validate_json_document(data: Any, rel: str, report: VerificationReport) -> None:
+    """Dispatch a parsed JSON value to the schema checks. Lists are validated item by item."""
+    if isinstance(data, list):
+        for idx, item in enumerate(data):
+            if isinstance(item, (dict, list)):
+                validate_json_document(item, f"{rel}[{idx}]", report)
+        return
 
     if not isinstance(data, dict):
         return
@@ -682,8 +726,8 @@ def validate_json_file(json_path: Path, root: Path, report: VerificationReport) 
         _check_saudi_identifier(data.get("national_id"), None, rel, "BosEnrollmentDraft.national_id", report)
         return
 
-    # 3. Single BPR provider record
-    if "spid" in data and ("name_en" in data or "profession" in data or "type" in data):
+    # 3. Single BPR provider record (any object carrying an 'spid')
+    if "spid" in data:
         validate_bpr_provider_record(data, rel, report)
         return
 
@@ -703,13 +747,13 @@ def validate_json_file(json_path: Path, root: Path, report: VerificationReport) 
                         f"Unexpected credentialSubject.verificationLevel '{ver_level}'",
                     )
 
-    # 5. Collection of BPR providers (providers.json -> items[] or BprSearchResult -> providers[])
-    for list_key in ("items", "providers"):
-        arr = data.get(list_key)
+    # 5. Containers: any list-valued key (items[], providers[], entries, ...) whose elements are
+    #    BPR providers or FHIR resources is validated, so records are not skipped by key name.
+    for list_key, arr in data.items():
         if isinstance(arr, list):
             for idx, item in enumerate(arr):
-                if isinstance(item, dict) and "spid" in item:
-                    validate_bpr_provider_record(item, f"{rel}#{list_key}[{idx}]", report)
+                if isinstance(item, dict) and ("spid" in item or "resourceType" in item):
+                    validate_json_document(item, f"{rel}#{list_key}[{idx}]", report)
 
 
 def collect_json_files(root: Path, raw_paths: Iterable[str]) -> list[Path]:
@@ -728,7 +772,7 @@ def collect_json_files(root: Path, raw_paths: Iterable[str]) -> list[Path]:
                 discovered.append(candidate)
         elif candidate.is_dir():
             for child in sorted(candidate.rglob("*.json")):
-                if any(part in {"node_modules", ".git", "build", "dist"} for part in child.parts):
+                if any(part in {"node_modules", ".git", "build", "dist"} for part in child.relative_to(candidate).parts):
                     continue
                 resolved = child.resolve()
                 if resolved not in seen:
@@ -825,7 +869,7 @@ def run_verification(
     for jf in json_files:
         validate_json_file(jf, root, report)
 
-    if report.certificates_checked == 0 and report.json_files_checked == 0 and report.ok:
+    if (require_trust or require_fhir) and report.certificates_checked == 0 and report.json_files_checked == 0 and report.ok:
         report.add_error(
             "config",
             ".",
