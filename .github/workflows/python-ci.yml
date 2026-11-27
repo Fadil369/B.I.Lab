@@ -90,9 +90,9 @@ jobs:
         run: |
           pip install pytest pytest-cov
           set -f
-          read -r -a pytest_args <<< "$PYTEST_ARGS"
+          read -r -a extra_args <<< "$PYTEST_ARGS"
           set +f
-          pytest "${pytest_args[@]}"
+          pytest "${extra_args[@]}"
 
       - name: Upload coverage
         if: inputs.upload-coverage && always()

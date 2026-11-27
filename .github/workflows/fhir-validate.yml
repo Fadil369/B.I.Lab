@@ -97,18 +97,18 @@ jobs:
           IGS: ${{ inputs.implementation-guides }}
         run: |
           set -f
-          read -r -a igs <<< "$IGS"
+          read -r -a ig_list <<< "$IGS"
           set +f
           ig_args=()
-          for ig in "${igs[@]}"; do
+          for ig in "${ig_list[@]}"; do
             ig_args+=(-ig "$ig")
           done
-          target="$TARGET"
-          if [[ "$target" == -* ]]; then
-            target="./$target"
+          scan_target="$TARGET"
+          if [[ "$scan_target" == -* ]]; then
+            scan_target="./$scan_target"
           fi
           set +e
-          java -jar ~/.cache/fhir-validator/validator_cli.jar "$target" -version "$FHIR_VERSION" "${ig_args[@]}" -output validation-outcome.json
+          java -jar ~/.cache/fhir-validator/validator_cli.jar "$scan_target" -version "$FHIR_VERSION" "${ig_args[@]}" -output validation-outcome.json
           status=$?
           set -e
           echo "validator exit code: $status"

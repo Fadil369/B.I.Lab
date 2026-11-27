@@ -78,14 +78,14 @@ jobs:
         run: |
           set -euo pipefail
           branch="${HEAD_REF:-$REF_NAME}"
-          output_dir="$OUTPUT_DIR"
-          if [[ "$output_dir" == -* ]]; then
-            output_dir="./$output_dir"
+          upload_dir="$OUTPUT_DIR"
+          if [[ "$upload_dir" == -* ]]; then
+            upload_dir="./$upload_dir"
           fi
           out_dir="$RUNNER_TEMP/wrangler-output"
           mkdir -p "$out_dir"
           export WRANGLER_OUTPUT_FILE_DIRECTORY="$out_dir"
-          npx --yes wrangler@4 pages deploy "$output_dir" \
+          npx --yes wrangler@4 pages deploy "$upload_dir" \
             --project-name="$PROJECT_NAME" \
             --branch="$branch" | tee "$RUNNER_TEMP/wrangler.log"
           url=""
