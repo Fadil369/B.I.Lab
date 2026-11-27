@@ -1,0 +1,12 @@
+[submodule "projects/agent-visibility"]
+	path = projects/agent-visibility
+	url = https://github.com/Fadil369/agent-visibility.git
+[submodule "projects/brainsait-superagent"]
+	path = projects/brainsait-superagent
+	url = https://github.com/Fadil369/brainsait-superagent.git
+[submodule "projects/fadil369.github.io"]
+	path = projects/fadil369.github.io
+	url = https://github.com/Fadil369/fadil369.github.io.git
+[submodule "projects/brainsait-ai-automation"]
+	path = projects/brainsait-ai-automation
+	url = https://github.com/Fadil369/brainsait-ai-automation.git

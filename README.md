@@ -62,6 +62,10 @@ Ready-to-copy callers live in [`examples/`](examples):
 - **Private repo access.** If this repository is private, enable
   *Settings → Actions → General → Access → "Accessible from repositories owned by the user"* so other repos can call it.
 
+## Projects
+
+Public BrainSAIT projects are indexed in [`projects/`](projects/README.md) as git submodules.
+
 ## Compliance guardrails (HIPAA / NPHIES)
 
 These workflows are CI/CD plumbing; they do not make an app compliant on their own. They do help:
