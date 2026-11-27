@@ -8,7 +8,7 @@ on:
       node-version:
         description: Node.js version (or a version file such as .nvmrc via node-version-file)
         type: string
-        default: "20"
+        default: "24"
       node-version-file:
         description: Path to .nvmrc / .node-version. Overrides node-version when set.
         type: string
@@ -81,19 +81,87 @@ jobs:
 
       - name: Lint
         if: inputs.lint-script != ''
-        run: ${{ inputs.package-manager }} run ${{ inputs.lint-script }} --if-present
+        env:
+          PM: ${{ inputs.package-manager }}
+          SCRIPT: ${{ inputs.lint-script }}
+        run: |
+          if [[ "$SCRIPT" == -* ]]; then
+            echo "::error::Invalid lint-script '$SCRIPT'"
+            exit 1
+          fi
+          case "$PM" in
+            npm)  npm run --if-present "$SCRIPT" ;;
+            pnpm) pnpm run --if-present "$SCRIPT" ;;
+            yarn)
+              if jq -e --arg s "$SCRIPT" '.scripts[$s] != null' package.json > /dev/null 2>&1; then
+                yarn run "$SCRIPT"
+              fi
+              ;;
+            *) echo "::error::Unsupported package-manager '$PM'"; exit 1 ;;
+          esac
 
       - name: Type-check
         if: inputs.typecheck-script != ''
-        run: ${{ inputs.package-manager }} run ${{ inputs.typecheck-script }} --if-present
+        env:
+          PM: ${{ inputs.package-manager }}
+          SCRIPT: ${{ inputs.typecheck-script }}
+        run: |
+          if [[ "$SCRIPT" == -* ]]; then
+            echo "::error::Invalid typecheck-script '$SCRIPT'"
+            exit 1
+          fi
+          case "$PM" in
+            npm)  npm run --if-present "$SCRIPT" ;;
+            pnpm) pnpm run --if-present "$SCRIPT" ;;
+            yarn)
+              if jq -e --arg s "$SCRIPT" '.scripts[$s] != null' package.json > /dev/null 2>&1; then
+                yarn run "$SCRIPT"
+              fi
+              ;;
+            *) echo "::error::Unsupported package-manager '$PM'"; exit 1 ;;
+          esac
 
       - name: Test
         if: inputs.test-script != ''
-        run: ${{ inputs.package-manager }} run ${{ inputs.test-script }} --if-present
+        env:
+          PM: ${{ inputs.package-manager }}
+          SCRIPT: ${{ inputs.test-script }}
+        run: |
+          if [[ "$SCRIPT" == -* ]]; then
+            echo "::error::Invalid test-script '$SCRIPT'"
+            exit 1
+          fi
+          case "$PM" in
+            npm)  npm run --if-present "$SCRIPT" ;;
+            pnpm) pnpm run --if-present "$SCRIPT" ;;
+            yarn)
+              if jq -e --arg s "$SCRIPT" '.scripts[$s] != null' package.json > /dev/null 2>&1; then
+                yarn run "$SCRIPT"
+              fi
+              ;;
+            *) echo "::error::Unsupported package-manager '$PM'"; exit 1 ;;
+          esac
 
       - name: Build
         if: inputs.build-script != ''
-        run: ${{ inputs.package-manager }} run ${{ inputs.build-script }} --if-present
+        env:
+          PM: ${{ inputs.package-manager }}
+          SCRIPT: ${{ inputs.build-script }}
+        run: |
+          if [[ "$SCRIPT" == -* ]]; then
+            echo "::error::Invalid build-script '$SCRIPT'"
+            exit 1
+          fi
+          case "$PM" in
+            npm)  npm run --if-present "$SCRIPT" ;;
+            pnpm) pnpm run --if-present "$SCRIPT" ;;
+            yarn)
+              if jq -e --arg s "$SCRIPT" '.scripts[$s] != null' package.json > /dev/null 2>&1; then
+                yarn run "$SCRIPT"
+              fi
+              ;;
+            *) echo "::error::Unsupported package-manager '$PM'"; exit 1 ;;
+          esac
 
       - name: Upload build output
         if: inputs.upload-artifact-path != ''

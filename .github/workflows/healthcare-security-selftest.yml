@@ -14,6 +14,7 @@ jobs:
       contents: read
       security-events: write
       actions: read
+      packages: read
     with:
-      codeql-languages: '["actions","python"]'
       tools-ref: ${{ github.sha }}
+      codeql-languages: '["actions","python"]'

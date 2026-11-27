@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 SEVERITIES = ("low", "medium", "high")
 SEVERITY_RANK = {"none": 99, "low": 0, "medium": 1, "high": 2}
@@ -54,7 +54,7 @@ INLINE_IGNORE = "phi-scan:ignore"
 DEFAULT_EXCLUDES = [
     ".git/**", "**/.git/**",
     "**/node_modules/**", "**/vendor/**", "**/.venv/**", "**/venv/**",
-    "**/dist/**", "**/build/**", "**/.next/**", "**/coverage/**",
+    "**/dist/**", "**/build/**", "**/.gradle/**", "**/.next/**", "**/coverage/**",
     "**/*.min.js", "**/*.min.css", "**/*.map",
     "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/poetry.lock",
     "**/Cargo.lock", "**/go.sum", "**/composer.lock", "**/Gemfile.lock",
@@ -74,7 +74,7 @@ CLINICAL_FILE_EXTENSIONS = {
 # BILINGUAL: Arabic terms included (patient, identity, national ID, medical file, date of birth).
 PATIENT_CONTEXT = re.compile(
     r"(?i)(patient|beneficiar|member[_ -]?id|subscriber|insured|mrn|medical[_ -]?record|"
-    r"date[_ -]?of[_ -]?birth|\bdob\b|birth[_ -]?date|diagnos|nphies|claim|encounter|"
+    r"date[_ -]?of[_ -]?birth|\bdob\b|birth[_ -]?date|diagnos|nphies|scfhs|claim|encounter|"
     r"national[_ -]?id|iqama|\bnid\b|مريض|المريض|هوية|الهوية|رقم\s*الملف|تاريخ\s*الميلاد)"
 )
 
@@ -90,14 +90,24 @@ EPOCH_CONTEXT = re.compile(
 )
 
 LOG_CALL = re.compile(
-    r"(console\.(log|info|warn|error|debug|trace)|\blogger\.\w+|\blogging\.\w+|\blog\.\w+|"
-    r"\bprint(ln|f)?\s*\(|\bputs\b|\bNSLog\b|\bos_log\b|\bLog\.[dievw]\b|\bfmt\.Print|"
-    r"\bSystem\.out\.print|\bconsole\.table)"
+    r"(console\.(log|info|warn|error|debug|trace)\s*\(|\blogger\.\w+\s*\(|\blogging\.\w+\s*\(|\blog\.\w+\s*\(|"
+    r"\bprint(ln|f)?\s*\(|\bputs\b|\bNSLog\s*\(|\bos_log\s*\(|"
+    r"\b(?:android\.util\.)?Log\.(?:wtf|[dievw])\s*\(|"
+    r"\bTimber(?:\.tag\s*\([^)]*\))?\.(?:wtf|[dievw])\s*\(|"
+    r"\bfmt\.Print\w*\s*\(|\bSystem\.out\.print\w*\s*\(|\bconsole\.table\s*\()"
 )
 LOG_SENSITIVE_FIELD = re.compile(
     r"(?i)(patient(?!s?_?count)|\bssn\b|national[_ ]?id|nationalid|iqama|\bmrn\b|\bdob\b|"
     r"date_?of_?birth|birth_?date|diagnos|beneficiary|member_?id|insurance_?(no|number|id)|"
-    r"full_?name|first_?name|last_?name|phone|mobile|email|address)"
+    r"full_?name|first_?name|last_?name|phone|mobile|email|address|\biban\b|"
+    r"scfhs[_ -]?(?:license|licence|id|no|num|number|reg\w*|code|cert\w*)|"
+    r"\bscfhs\s*(?:=|\$|:\s*[\"\'\d${])|\.scfhs\b|\$\{?scfhs\w*|\b\d{2}-[A-Z]{1,3}-[A-Z]{1,3}-\d{4,10}\b|"
+    r"practitioner[_ -]?(?:license|licence|id)|clinician[_ -]?(?:license|licence|id)|"
+    r"license[_ -]?(?:no|num|number)|licence[_ -]?(?:no|num|number)|"
+    r"nphies[_ -./]?(?:id|identifier|member\w*|beneficiar\w*|subscriber\w*|patient\w*|"
+    r"claim\w*|coverage\w*|policy\w*|payer\w*|provider\w*|practitioner\w*|license\w*|"
+    r"licence\w*|preauth\w*|episode\w*|no|num|number|ref\w*|token\w*|secret\w*|bundle\w*|payload\w*)|"
+    r"nphies\.sa/(?:license|identifier)/\S+|\bnphies\s*(?:=|\$|:\s*[\"\'\d${])|\.nphies\b|\$\{?nphies\w*)"
 )
 
 KNOWN_TEST_SSNS = {"078-05-1120", "123-45-6789", "219-09-9999", "457-55-5462"}
@@ -217,9 +227,10 @@ RULES = {
              "A date of birth (Gregorian or Hijri) assigned a literal value.",
              "Use synthetic dates in fixtures; confirm the record is not real."),
         Rule("PHI008", "phi-in-log-statement", "medium",
-             "A logging or print call that appears to include patient or contact fields.",
-             "Log opaque IDs or redacted values only. Route PHI access to the audit log, not "
-             "the application log."),
+             "A logging or print call (including Kotlin/Android Log.* and Timber.*) that appears "
+             "to include patient, contact, SCFHS license, IBAN or NPHIES identifier fields.",
+             "Log opaque IDs or redacted values only. Route PHI and credential access to the "
+             "audit log, not the application log."),
         Rule("PHI009", "fhir-patient-with-identifiers", "medium",
              "A FHIR Patient resource with identifier, name or birthDate values outside a "
              "synthetic-data path.",
@@ -230,6 +241,10 @@ RULES = {
              "with a PID segment.",
              "Keep clinical payloads out of git. Use de-identified samples stored outside the "
              "repository."),
+        Rule("PHI011", "saudi-iban", "high",
+             "Saudi bank account IBAN (SA followed by 22 digits).",
+             "Remove real account numbers or replace with the all-zero placeholder "
+             "SA0000000000000000000000 in synthetic fixtures."),
     ]
 }
 
@@ -354,6 +369,7 @@ def looks_generated(path: Path, text: str) -> bool:
 SAUDI_ID_RE = re.compile(r"(?<![\d.])([12]\d{9})(?![\d.])")
 SSN_RE = re.compile(r"(?<![\d-])(?!000|666|9\d\d)(\d{3})-(?!00)(\d{2})-(?!0000)(\d{4})(?![\d-])")
 SA_MOBILE_RE = re.compile(r"(?<![\d+])((?:\+966|00966|966)\s?5\d(?:[\s-]?\d){7}|05\d(?:[\s-]?\d){7})(?!\d)")
+SA_IBAN_RE = re.compile(r"(?<![A-Za-z0-9])(SA\d{2}(?:[\s-]?\d{4}){5})(?![A-Za-z0-9])")
 EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,})")
 SAFE_EMAIL_DOMAINS = re.compile(
     r"(?i)@((\w+\.)*(example\.(com|org|net)|test|invalid|localhost|"
@@ -414,7 +430,17 @@ def detect_line_patterns(rel: str, lines: list[str], text: str, cfg: Config) -> 
                 continue
             yield _finding("PHI003", rel, i, m.start(), value)
 
+        iban_spans: list[tuple[int, int]] = []
+        for m in SA_IBAN_RE.finditer(line):
+            digits = re.sub(r"\D", "", m.group(1))
+            iban_spans.append((m.start(1), m.end(1)))
+            if len(set(digits[2:])) <= 1:
+                continue
+            yield _finding("PHI011", rel, i, m.start(1), m.group(1))
+
         for m in SA_MOBILE_RE.finditer(line):
+            if any(s <= m.start(1) and m.end(1) <= e for s, e in iban_spans):
+                continue
             digits = re.sub(r"\D", "", m.group(1))
             if is_repetitive(digits) or digits.endswith("12345678"):
                 continue
@@ -439,11 +465,23 @@ def detect_line_patterns(rel: str, lines: list[str], text: str, cfg: Config) -> 
             yield _finding("PHI007", rel, i, m.start(2), m.group(2))
 
         for call in LOG_CALL.finditer(line):
-            # Only look at the arguments right after the call, not the rest of a long line.
-            args = line[call.end(): call.end() + 160]
+            # Look at the arguments right after the call; include continuation lines if '(' stays open.
+            call_open = line[call.start(): call.end()]
+            first_line_args = line[call.end(): call.end() + 200]
+            args = first_line_args
+            if (call_open.count("(") + first_line_args.count("(")) > (call_open.count(")") + first_line_args.count(")")):
+                extra: list[str] = []
+                for j in (i + 1, i + 2):
+                    if j < len(lines) and len(lines[j]) <= 200:
+                        extra.append(lines[j])
+                        if ")" in lines[j]:
+                            break
+                if extra:
+                    args = first_line_args + "\n" + "\n".join(extra)
             f = LOG_SENSITIVE_FIELD.search(args)
             if f:
-                yield _finding("PHI008", rel, i, call.end() + f.start(), f.group(0),
+                col = (call.end() + f.start()) if f.start() < len(first_line_args) else call.start()
+                yield _finding("PHI008", rel, i, col, f.group(0),
                                note=f"log call references '{f.group(0)}'")
                 break
 

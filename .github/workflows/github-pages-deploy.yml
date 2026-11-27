@@ -16,7 +16,7 @@ on:
         default: ""
       node-version:
         type: string
-        default: "20"
+        default: "24"
     outputs:
       page-url:
         value: ${{ jobs.deploy.outputs.page-url }}
@@ -43,7 +43,9 @@ jobs:
 
       - name: Build
         if: inputs.build-command != ''
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -eo pipefail -c "$BUILD_COMMAND"
 
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 

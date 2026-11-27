@@ -1,9 +1,25 @@
+# Third-party GitHub Actions in .github/workflows/ are pinned to full 40-char
+# commit SHAs with a trailing `# vX.Y.Z` version comment. Dependabot preserves
+# SHA pinning and updates both the commit SHA and version comment in place.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
     groups:
       actions:
-        patterns: ["*"]
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "Fadil369/B.I.Lab*"
+    ignore:
+      - dependency-name: "Fadil369/B.I.Lab*"

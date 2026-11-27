@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       audit-level:
-        description: npm audit threshold (low, moderate, high, critical). Empty skips the audit.
+        description: npm audit threshold (info, low, moderate, high, critical, none). Empty skips the audit.
         type: string
         default: high
       timeout-minutes:
@@ -58,13 +58,17 @@ jobs:
           cache: npm
 
       - name: Install
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: bash -eo pipefail -c "$INSTALL_COMMAND"
 
       - name: Build and verify
         shell: bash
+        env:
+          PRE_BROWSER_COMMANDS: ${{ inputs.pre-browser-commands }}
         run: |
           set -euo pipefail
-          ${{ inputs.pre-browser-commands }}
+          bash -euo pipefail -c "$PRE_BROWSER_COMMANDS"
 
       - if: inputs.php-version != ''
         uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
@@ -75,9 +79,11 @@ jobs:
       - name: PHP checks
         if: inputs.php-version != '' && inputs.php-commands != ''
         shell: bash
+        env:
+          PHP_COMMANDS: ${{ inputs.php-commands }}
         run: |
           set -euo pipefail
-          ${{ inputs.php-commands }}
+          bash -euo pipefail -c "$PHP_COMMANDS"
 
       - name: Install Playwright Chromium
         if: inputs.browser-commands != ''
@@ -86,10 +92,23 @@ jobs:
       - name: Browser checks
         if: inputs.browser-commands != ''
         shell: bash
+        env:
+          BROWSER_COMMANDS: ${{ inputs.browser-commands }}
         run: |
           set -euo pipefail
-          ${{ inputs.browser-commands }}
+          bash -euo pipefail -c "$BROWSER_COMMANDS"
 
       - name: npm audit
         if: inputs.audit-level != ''
-        run: npm audit --include=dev --audit-level=${{ inputs.audit-level }}
+        env:
+          AUDIT_LEVEL: ${{ inputs.audit-level }}
+        run: |
+          case "$AUDIT_LEVEL" in
+            info|low|moderate|high|critical|none)
+              npm audit --include=dev --audit-level="$AUDIT_LEVEL"
+              ;;
+            *)
+              echo "::error::Invalid audit-level '$AUDIT_LEVEL' (expected info, low, moderate, high, critical, or none)"
+              exit 1
+              ;;
+          esac

@@ -2,6 +2,8 @@
 # mode: mention -> answers @claude in issues and PRs
 # mode: review  -> automatic PR review with the code-review plugin (inline comments)
 # The caller owns the trigger (`on:` / `if:`) and must grant the permissions below.
+# Breaking vs earlier versions: the caller job must grant `pull-requests: write` and `issues: write`
+# (plus `id-token: write`, `actions: read`); `read` is rejected at startup. See examples/static-site.yml.
 name: Claude Code
 
 on:
@@ -23,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read
     steps:

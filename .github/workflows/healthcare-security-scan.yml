@@ -93,7 +93,7 @@ on:
         type: number
         default: 90
       tools-ref:
-        description: Git ref of Fadil369/B.I.Lab to load phi-scan from. Pin to a tag or SHA in production.
+        description: Git ref of Fadil369/B.I.Lab to load phi-scan from. Defaults to main until the v1 tag exists; pin to a tag or SHA in production.
         type: string
         default: main
     secrets:

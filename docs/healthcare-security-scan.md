@@ -52,7 +52,6 @@ jobs:
 ```
 
 The same file is in [`examples/healthcare-security.yml`](../examples/healthcare-security.yml).
-Until the `v1` tag exists, use `@main` or a commit SHA.
 
 Then, in branch protection, require the single check **Healthcare security gate**.
 
@@ -82,7 +81,7 @@ Then, in branch protection, require the single check **Healthcare security gate*
 | `phi-config` | `.phi-scan.json` | Path to the PHI scanner config in the calling repo. |
 | `upload-sarif` | `true` | Send results to code scanning. |
 | `artifact-retention-days` | `90` | How long raw gitleaks, built-image and phi-scan reports stay as artifacts (`trivy-scan.yml` keeps its own for 30 days). |
-| `tools-ref` | `main` | Ref of this repo to load phi-scan from. Pin it. |
+| `tools-ref` | `v1` | Ref of this repo to load phi-scan from. Pin it to a tag or SHA. |
 
 ---
 
@@ -139,9 +138,10 @@ copies PHI into CI logs or the Security tab.
 | PHI005 | Email addresses outside example.com/.org/.net, test, invalid, GitHub noreply | low, medium near patient words |
 | PHI006 | MRN / patient ID / file number assigned a literal containing digits | high |
 | PHI007 | Date of birth (Gregorian or Hijri) assigned a literal | medium |
-| PHI008 | Log/print calls whose arguments mention patient, national ID, MRN, DOB, phone, email, name, address… | medium |
+| PHI008 | Log/print calls (including Kotlin/Android `Log.d/i/w/e/v/wtf` and `Timber.*`) whose arguments mention patient, national ID, MRN, DOB, phone, email, address, IBAN, SCFHS license or NPHIES identifiers… | medium |
 | PHI009 | FHIR `Patient` resources with identifier/name/birthDate/telecom/address outside a synthetic path | medium |
 | PHI010 | HL7 v2 messages with a PID segment, DICOM/NIfTI/C-CDA files | high |
+| PHI011 | Saudi bank account IBAN (`SA` followed by 22 digits, excluding `SA0000000000000000000000`) | high |
 
 "Patient words" include English and Arabic terms (patient, MRN, DOB, diagnosis, NPHIES,
 claim, مريض، تاريخ الميلاد…), matched within 80 characters of the value.
@@ -210,8 +210,7 @@ officer confirm it.
 
 - **Pin everything.** Third-party actions in this workflow, `trivy-scan.yml` and `codeql.yml`
   are pinned to commit SHAs, because a hijacked tag on a scanner would run with
-  `security-events: write`. Pin `tools-ref` and the caller's `uses:` line to a tag or SHA too.
-  The nested library calls use `@main` until a `v1` tag exists.
+  `security-events: write`. Pin `tools-ref` and the caller's `uses:` line to `@v1` or a commit SHA.
 - **Weekly schedule.** New CVEs appear without code changes; the scheduled run catches them.
 - **Triage SLA [guess, adjust to your policy]:** secrets and high PHI findings same day;
   critical CVEs within 7 days; high within 30.

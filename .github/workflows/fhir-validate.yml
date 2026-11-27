@@ -42,16 +42,53 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Download HL7 validator
+      - name: Resolve validator release tag
+        id: validator-tag
         env:
           VERSION: ${{ inputs.validator-version }}
         run: |
-          if [ "$VERSION" = "latest" ]; then
-            url="https://github.com/hapifhir/org.hl7.fhir.core/releases/latest/download/validator_cli.jar"
-          else
-            url="https://github.com/hapifhir/org.hl7.fhir.core/releases/download/${VERSION}/validator_cli.jar"
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid validator-version '$VERSION'"
+            exit 1
           fi
-          curl -fsSL -o validator_cli.jar "$url"
+          if [ "$VERSION" = "latest" ]; then
+            effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/hapifhir/org.hl7.fhir.core/releases/latest")
+            resolved="${effective_url##*/}"
+            if [ -z "$resolved" ] || [ "$resolved" = "latest" ]; then
+              echo "::error::Could not resolve latest HL7 validator release tag"
+              exit 1
+            fi
+          else
+            resolved="$VERSION"
+          fi
+          echo "tag=$resolved" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FHIR packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.fhir
+          key: fhir-packages-${{ runner.os }}-${{ inputs.fhir-version }}-${{ inputs.implementation-guides }}
+          restore-keys: |
+            fhir-packages-${{ runner.os }}-${{ inputs.fhir-version }}-
+            fhir-packages-${{ runner.os }}-
+
+      - name: Cache HL7 validator CLI
+        id: validator-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fhir-validator/validator_cli.jar
+          key: fhir-validator-cli-${{ steps.validator-tag.outputs.tag }}
+
+      - name: Download HL7 validator
+        if: steps.validator-cache.outputs.cache-hit != 'true'
+        env:
+          TAG: ${{ steps.validator-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fhir-validator
+          url="https://github.com/hapifhir/org.hl7.fhir.core/releases/download/${TAG}/validator_cli.jar"
+          curl -fsSL --retry 3 -o ~/.cache/fhir-validator/validator_cli.jar "$url"
 
       - name: Validate
         env:
@@ -59,10 +96,17 @@ jobs:
           FHIR_VERSION: ${{ inputs.fhir-version }}
           IGS: ${{ inputs.implementation-guides }}
         run: |
+          mapfile -t ig_list < <(python3 -c 'import shlex,sys; sys.stdout.write("\n".join(shlex.split(sys.argv[1])))' "$IGS")
           ig_args=()
-          for ig in $IGS; do ig_args+=(-ig "$ig"); done
+          for ig in "${ig_list[@]}"; do
+            ig_args+=(-ig "$ig")
+          done
+          scan_target="$TARGET"
+          if [[ "$scan_target" == -* ]]; then
+            scan_target="./$scan_target"
+          fi
           set +e
-          java -jar validator_cli.jar "$TARGET" -version "$FHIR_VERSION" "${ig_args[@]}" -output validation-outcome.json
+          java -jar ~/.cache/fhir-validator/validator_cli.jar "$scan_target" -version "$FHIR_VERSION" "${ig_args[@]}" -output validation-outcome.json
           status=$?
           set -e
           echo "validator exit code: $status"
