@@ -1,0 +1,116 @@
+# BrainSAIT reusable workflow: Docker build (and optional push to GHCR)
+# Lints the Dockerfile with hadolint, builds multi-arch with Buildx + cache,
+# pushes to ghcr.io on non-PR events, and emits SBOM + provenance attestations.
+name: Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: Image name without registry (default owner/repo)
+        type: string
+        default: ""
+      context:
+        description: Docker build context
+        type: string
+        default: "."
+      dockerfile:
+        description: Path to Dockerfile
+        type: string
+        default: Dockerfile
+      platforms:
+        description: Target platforms
+        type: string
+        default: linux/amd64
+      push:
+        description: Push to GHCR (ignored on pull_request events, which never push)
+        type: boolean
+        default: true
+      build-args:
+        description: Newline-separated build args (no secrets here)
+        type: string
+        default: ""
+      run-hadolint:
+        type: boolean
+        default: true
+    outputs:
+      image:
+        description: Fully qualified image reference (first tag)
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: Image digest when pushed
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # push to ghcr.io
+      id-token: write       # provenance attestation
+      attestations: write
+    outputs:
+      image: ${{ steps.meta.outputs.tags && fromJSON(steps.meta.outputs.json).tags[0] }}
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      REGISTRY: ghcr.io
+      IMAGE: ${{ inputs.image-name != '' && inputs.image-name || github.repository }}
+      DO_PUSH: ${{ inputs.push && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        if: inputs.run-hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          failure-threshold: error
+
+      - uses: docker/setup-qemu-action@v3
+        if: contains(inputs.platforms, ',')
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: env.DO_PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ env.DO_PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.build-args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest build provenance
+        if: env.DO_PUSH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

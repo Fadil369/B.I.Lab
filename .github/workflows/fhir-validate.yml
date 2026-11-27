@@ -1,0 +1,81 @@
+# BrainSAIT reusable workflow: FHIR R4 resource validation  (EXPERIMENTAL)
+# Runs the official HL7 FHIR Validator over JSON/XML resources in the repo,
+# optionally against Implementation Guides (e.g. NPHIES packages).
+# Use it on test fixtures and example bundles only. Never commit real PHI.
+name: FHIR Validate
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: File or directory of FHIR resources to validate
+        type: string
+        default: fhir
+      fhir-version:
+        type: string
+        default: "4.0.1"
+      implementation-guides:
+        description: Space-separated IG package ids or URLs passed as -ig (e.g. an NPHIES package)
+        type: string
+        default: ""
+      validator-version:
+        description: HL7 validator_cli release tag, or "latest"
+        type: string
+        default: latest
+      fail-on-error:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download HL7 validator
+        env:
+          VERSION: ${{ inputs.validator-version }}
+        run: |
+          if [ "$VERSION" = "latest" ]; then
+            url="https://github.com/hapifhir/org.hl7.fhir.core/releases/latest/download/validator_cli.jar"
+          else
+            url="https://github.com/hapifhir/org.hl7.fhir.core/releases/download/${VERSION}/validator_cli.jar"
+          fi
+          curl -fsSL -o validator_cli.jar "$url"
+
+      - name: Validate
+        env:
+          TARGET: ${{ inputs.path }}
+          FHIR_VERSION: ${{ inputs.fhir-version }}
+          IGS: ${{ inputs.implementation-guides }}
+        run: |
+          ig_args=()
+          for ig in $IGS; do ig_args+=(-ig "$ig"); done
+          set +e
+          java -jar validator_cli.jar "$TARGET" -version "$FHIR_VERSION" "${ig_args[@]}" -output validation-outcome.json
+          status=$?
+          set -e
+          echo "validator exit code: $status"
+          echo "status=$status" >> "$GITHUB_ENV"
+
+      - name: Upload OperationOutcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhir-validation-outcome
+          path: validation-outcome.json
+          if-no-files-found: ignore
+
+      - name: Fail on validation errors
+        if: inputs.fail-on-error && env.status != '0'
+        run: |
+          echo "::error::FHIR validation reported errors. See the fhir-validation-outcome artifact."
+          exit 1

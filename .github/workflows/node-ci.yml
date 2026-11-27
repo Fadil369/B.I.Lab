@@ -1,0 +1,102 @@
+# BrainSAIT reusable workflow: Node.js / TypeScript CI
+# Install, lint, type-check, test and build a Node project (Next.js, React, Workers code).
+name: Node CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version (or a version file such as .nvmrc via node-version-file)
+        type: string
+        default: "20"
+      node-version-file:
+        description: Path to .nvmrc / .node-version. Overrides node-version when set.
+        type: string
+        default: ""
+      package-manager:
+        description: npm, pnpm or yarn
+        type: string
+        default: npm
+      working-directory:
+        description: Directory holding package.json (monorepo apps/*, packages/*)
+        type: string
+        default: "."
+      lint-script:
+        description: npm script for lint. Empty string skips the step.
+        type: string
+        default: lint
+      typecheck-script:
+        description: npm script for type-checking. Empty string skips the step.
+        type: string
+        default: typecheck
+      test-script:
+        description: npm script for tests. Empty string skips the step.
+        type: string
+        default: test
+      build-script:
+        description: npm script for build. Empty string skips the step.
+        type: string
+        default: build
+      upload-artifact-path:
+        description: Build output to upload as an artifact (e.g. dist or .next). Empty skips upload.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Node ${{ inputs.node-version }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version-file == '' && inputs.node-version || '' }}
+          node-version-file: ${{ inputs.node-version-file }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'npm' && 'package-lock.json' || inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || 'yarn.lock' }}
+
+      - name: Install dependencies
+        env:
+          PM: ${{ inputs.package-manager }}
+        run: |
+          case "$PM" in
+            npm)  npm ci ;;
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) echo "::error::Unsupported package-manager '$PM'"; exit 1 ;;
+          esac
+
+      - name: Lint
+        if: inputs.lint-script != ''
+        run: ${{ inputs.package-manager }} run ${{ inputs.lint-script }} --if-present
+
+      - name: Type-check
+        if: inputs.typecheck-script != ''
+        run: ${{ inputs.package-manager }} run ${{ inputs.typecheck-script }} --if-present
+
+      - name: Test
+        if: inputs.test-script != ''
+        run: ${{ inputs.package-manager }} run ${{ inputs.test-script }} --if-present
+
+      - name: Build
+        if: inputs.build-script != ''
+        run: ${{ inputs.package-manager }} run ${{ inputs.build-script }} --if-present
+
+      - name: Upload build output
+        if: inputs.upload-artifact-path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-build
+          path: ${{ inputs.working-directory }}/${{ inputs.upload-artifact-path }}
+          retention-days: 7

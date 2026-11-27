@@ -1,6 +1,12 @@
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.4.0
+  rev: v4.6.0
   hooks:
   - id: trailing-whitespace
-    files: (automation/|ci/|code-scanning/|deployments/|pages/).*(yaml|yml|json)$
+    files: (\.github/|examples/).*(yaml|yml)$
+  - id: end-of-file-fixer
+    files: (\.github/|examples/).*(yaml|yml)$
+- repo: https://github.com/rhysd/actionlint
+  rev: v1.7.7
+  hooks:
+  - id: actionlint

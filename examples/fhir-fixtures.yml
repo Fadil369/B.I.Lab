@@ -1,0 +1,15 @@
+# Example caller: validate FHIR R4 test fixtures (no real PHI) on every PR.
+name: FHIR
+
+on:
+  pull_request:
+    paths: ["fhir/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: Fadil369/B.I.Lab/.github/workflows/fhir-validate.yml@v1
+    with:
+      path: fhir/examples

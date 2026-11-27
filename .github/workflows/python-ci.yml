@@ -1,0 +1,87 @@
+# BrainSAIT reusable workflow: Python / FastAPI CI
+# Ruff lint + format check, mypy type-check, pytest with coverage.
+name: Python CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version
+        type: string
+        default: "3.12"
+      working-directory:
+        description: Directory holding pyproject.toml / requirements.txt
+        type: string
+        default: "."
+      install-command:
+        description: Command that installs the project and its dev tools
+        type: string
+        default: pip install -r requirements.txt -r requirements-dev.txt
+      run-ruff:
+        type: boolean
+        default: true
+      run-mypy:
+        type: boolean
+        default: true
+      mypy-target:
+        description: Package or path passed to mypy
+        type: string
+        default: "."
+      pytest-args:
+        description: Extra arguments for pytest
+        type: string
+        default: "--cov --cov-report=xml"
+      upload-coverage:
+        description: Upload coverage.xml as an artifact
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Python ${{ inputs.python-version }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          ${{ inputs.install-command }}
+
+      - name: Ruff lint
+        if: inputs.run-ruff
+        run: |
+          pip install ruff
+          ruff check --output-format=github .
+          ruff format --check .
+
+      - name: mypy
+        if: inputs.run-mypy
+        run: |
+          pip install mypy
+          mypy ${{ inputs.mypy-target }}
+
+      - name: pytest
+        run: |
+          pip install pytest pytest-cov
+          pytest ${{ inputs.pytest-args }}
+
+      - name: Upload coverage
+        if: inputs.upload-coverage && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ inputs.python-version }}
+          path: ${{ inputs.working-directory }}/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 7

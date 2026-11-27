@@ -1,0 +1,72 @@
+# BrainSAIT reusable workflow: Cloudflare Pages deploy (direct upload)
+# Builds a static site and uploads it with `wrangler pages deploy`.
+# Pull requests get a preview deployment on their own branch alias.
+name: Cloudflare Pages Deploy
+
+on:
+  workflow_call:
+    inputs:
+      project-name:
+        description: Cloudflare Pages project name
+        type: string
+        required: true
+      output-directory:
+        description: Directory to upload after build (e.g. dist, out, public)
+        type: string
+        default: dist
+      working-directory:
+        type: string
+        default: "."
+      node-version:
+        type: string
+        default: "20"
+      build-command:
+        description: Build command. Empty skips install and build (plain static files).
+        type: string
+        default: npm ci && npm run build
+      github-environment:
+        type: string
+        default: production
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+    outputs:
+      deployment-url:
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'preview' || inputs.github-environment }}
+    permissions:
+      contents: read
+      deployments: write
+    outputs:
+      deployment-url: ${{ steps.wrangler.outputs.deployment-url }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        if: inputs.build-command != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+
+      - id: wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ inputs.working-directory }}
+          command: pages deploy ${{ inputs.output-directory }} --project-name=${{ inputs.project-name }} --branch=${{ github.head_ref || github.ref_name }}
