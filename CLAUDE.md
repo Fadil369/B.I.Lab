@@ -1,0 +1,31 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+BrainSAIT reusable GitHub Actions workflow library (`Fadil369/B.I.Lab`). No app code or build system. Docs are bilingual EN/AR, no emojis, guesses marked `[guess]`.
+
+## Layout
+- `.github/workflows/`: 14 reusable workflows (`on: workflow_call`) plus 3 repo-internal CI files (`library-lint.yml`, `phi-scan-tests.yml`, `healthcare-security-selftest.yml`) that are not callable.
+- `examples/`: caller workflows, linted in CI.
+- `script/phi-scan/`: stdlib-only PHI heuristic scanner and its tests.
+- `projects/`: git submodules, pointers only.
+
+## Commands
+- Lint workflows (same as CI): `actionlint -color .github/workflows/*.yml examples/*.yml` (CI uses v1.7.7)
+- phi-scan tests: `python -m unittest discover -s script/phi-scan -v` and `cd script/phi-scan && python -m doctest -v phi_scan.py`
+- Self-scan, must stay clean: `python script/phi-scan/phi_scan.py --root . --fail-on medium` (exit 1 = findings, 2 = usage error). Suppress a line inline with `phi-scan:ignore`.
+
+## Workflow conventions
+- Pin every third-party action to a full commit SHA with the version as a trailing comment: `uses: actions/checkout@<sha> # v7.0.1`. Never use a tag or branch. This is mandatory for security tools (trivy, codeql, gitleaks), which run with `security-events: write`.
+- Top-level `permissions: contents: read`; grant extra permissions per job only.
+- Checkout with `persist-credentials: false`.
+- Start each reusable workflow with the header comment `# BrainSAIT reusable workflow: ...`. Inputs are typed, kebab-case and have defaults; an empty-string input skips a stage. Secrets are passed explicitly, never `secrets: inherit`.
+- When you add or change a workflow, also update the README workflow table, the relevant `examples/` caller, and the header comment.
+- Workflow changes affect every BrainSAIT repo (CODEOWNERS: `@Fadil369`).
+
+## Gotchas
+- The README documents callers as `@v1`, but no `v1` tag exists yet. Nested calls inside `healthcare-security-scan.yml` and the selftest deliberately use `@main` until it does. Do not "fix" them to `@v1`.
+- Never put PHI, secrets or client names in this repo, logs, artifacts or fixtures. `fhir-validate` and phi-scan tests use synthetic data only.
+- `projects/` holds only public Fadil369 repos as submodules. Do not edit files inside them. Bump with `git submodule update --remote projects/<name>` and commit the pointer. After a fresh clone run `git submodule update --init --recursive`.
+- `.private/` is local-only (excluded via `.git/info/exclude`) and lists private/client repos. Do not read, commit or reference it.
+- `git worktree list` shows worktrees under `~/.gemini/antigravity/worktrees/`. They belong to another tool; do not remove or modify them.
