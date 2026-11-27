@@ -81,3 +81,7 @@ These workflows are CI/CD plumbing; they do not make an app compliant on their o
 
 This repo started as a copy of [actions/starter-workflows](https://github.com/actions/starter-workflows) (MIT, see [LICENSE](LICENSE)).
 The original templates were removed and replaced with the BrainSAIT reusable set above.
+
+## Maintainer and citation
+
+Maintained by Mohamed Elfadil ([ORCID 0009-0003-7485-3575](https://orcid.org/0009-0003-7485-3575)). Citation metadata is in [`CITATION.cff`](CITATION.cff); GitHub shows it as "Cite this repository".

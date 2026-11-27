@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this workflow library, please cite it as below."
+title: "B.I.Lab: BrainSAIT reusable workflow library"
+type: software
+authors:
+  - family-names: Elfadil
+    given-names: Mohamed
+    orcid: "https://orcid.org/0009-0003-7485-3575"
+repository-code: "https://github.com/Fadil369/B.I.Lab"
+license: MIT
