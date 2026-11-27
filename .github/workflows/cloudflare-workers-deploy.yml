@@ -22,7 +22,7 @@ on:
         default: "24"
       wrangler-version:
         type: string
-        default: "4"
+        default: "4.169.0"
       test-script:
         description: npm script run before deploy. Empty skips tests.
         type: string

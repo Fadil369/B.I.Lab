@@ -76,9 +76,7 @@ jobs:
           MYPY_TARGET: ${{ inputs.mypy-target }}
         run: |
           pip install mypy
-          set -f
-          read -r -a targets <<< "$MYPY_TARGET"
-          set +f
+          mapfile -t targets < <(python3 -c 'import shlex,sys; sys.stdout.write("\n".join(shlex.split(sys.argv[1])))' "$MYPY_TARGET")
           if [ "${#targets[@]}" -eq 0 ]; then
             targets=(.)
           fi
@@ -89,9 +87,7 @@ jobs:
           PYTEST_ARGS: ${{ inputs.pytest-args }}
         run: |
           pip install pytest pytest-cov
-          set -f
-          read -r -a extra_args <<< "$PYTEST_ARGS"
-          set +f
+          mapfile -t extra_args < <(python3 -c 'import shlex,sys; sys.stdout.write("\n".join(shlex.split(sys.argv[1])))' "$PYTEST_ARGS")
           pytest "${extra_args[@]}"
 
       - name: Upload coverage
