@@ -33,10 +33,14 @@ on:
         description: Days to retain the bpr-verify JSON report artifact.
         type: number
         default: 90
-      tools-ref:
-        description: Git ref of Fadil369/B.I.Lab to load script/bpr-verify from (default v1).
+      artifact-suffix:
+        description: Optional suffix for the uploaded artifact name; set it when calling this workflow more than once in a run.
         type: string
-        default: "v1"
+        default: ""
+      tools-ref:
+        description: Git ref of Fadil369/B.I.Lab to load script/bpr-verify from. Defaults to main until the v1 tag includes script/bpr-verify; pin to a tag or SHA in production.
+        type: string
+        default: "main"
     secrets:
       tools-token:
         description: Optional token with read access to Fadil369/B.I.Lab (only needed if B.I.Lab is private).
@@ -115,7 +119,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bpr-verify-report
+          name: bpr-verify-report${{ inputs.artifact-suffix && format('-{0}', inputs.artifact-suffix) || '' }}
           path: bpr-verify-report.json
           if-no-files-found: ignore
           retention-days: ${{ inputs.artifact-retention-days }}

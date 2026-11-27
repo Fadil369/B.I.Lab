@@ -440,7 +440,7 @@ jobs:
           echo "release_url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch release metadata to ecosystem hub
-        if: inputs.dispatch-repo != ''
+        if: inputs.dispatch-repo != '' && inputs.create-release && steps.meta.outputs.can_publish_release == 'true'
         env:
           DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
           DISPATCH_REPO: ${{ inputs.dispatch-repo }}

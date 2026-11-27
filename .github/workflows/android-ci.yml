@@ -39,6 +39,10 @@ on:
         description: Glob (relative to working-directory) for built debug APKs to upload.
         type: string
         default: "**/build/outputs/apk/debug/*.apk"
+      artifact-suffix:
+        description: Optional suffix for uploaded artifact names; set it when calling this workflow more than once in a run (e.g. a JDK matrix).
+        type: string
+        default: ""
       artifact-retention-days:
         description: Days to retain test, lint, and debug APK artifacts.
         type: number
@@ -187,7 +191,7 @@ jobs:
         if: always() && inputs.gradle-test-tasks != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-unit-test-reports
+          name: android-unit-test-reports${{ inputs.artifact-suffix && format('-{0}', inputs.artifact-suffix) || '' }}
           path: |
             ${{ inputs.working-directory }}/**/build/test-results/**/*.xml
             ${{ inputs.working-directory }}/**/build/reports/tests/**
@@ -198,7 +202,7 @@ jobs:
         if: always() && inputs.gradle-lint-tasks != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-lint-reports
+          name: android-lint-reports${{ inputs.artifact-suffix && format('-{0}', inputs.artifact-suffix) || '' }}
           path: |
             ${{ inputs.working-directory }}/**/build/reports/lint-results*.html
             ${{ inputs.working-directory }}/**/build/reports/lint-results*.sarif
@@ -211,7 +215,7 @@ jobs:
         if: inputs.gradle-assemble-tasks != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-debug-apks
+          name: android-debug-apks${{ inputs.artifact-suffix && format('-{0}', inputs.artifact-suffix) || '' }}
           path: ${{ inputs.working-directory }}/${{ inputs.apk-artifact-glob }}
           if-no-files-found: warn
           retention-days: ${{ inputs.artifact-retention-days }}

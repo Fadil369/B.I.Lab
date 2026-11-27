@@ -350,6 +350,84 @@ class FhirAndBprSchemaTests(unittest.TestCase):
             self.assertNotIn(real_phone, combined_messages)
 
 
+class AuditRegressionTests(unittest.TestCase):
+    """Regressions from the post-merge audit of PR #7."""
+
+    def run_json(self, files: dict[str, object], *, subdir: str = "fhir", **kwargs):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        target = root / subdir
+        target.mkdir(parents=True)
+        for name, payload in files.items():
+            (target / name).write_text(json.dumps(payload), encoding="utf-8")
+        opts = dict(trust_dir=None, fhir_paths=[subdir], require_trust=False, require_fhir=True)
+        opts.update(kwargs)
+        return bpr_verify.run_verification(root=root, **opts)
+
+    def rules(self, report) -> set[str]:
+        return {i.rule for i in report.issues}
+
+    def test_untrusted_status_not_skipped_for_list_and_sparse_records(self) -> None:
+        report = self.run_json({
+            "list.json": [{"spid": "S1", "name_en": "x", "licence_status": "UNTRUSTED"}],
+            "sparse.json": {"spid": "S2", "licence_status": "FAKE"},
+            "other-key.json": {"records": [{"spid": "S3", "licence_status": "FAKE"}]},
+        })
+        self.assertFalse(report.ok)
+        self.assertEqual(report.bpr_records_checked, 3)
+        self.assertIn("BPR-TRUST-001", self.rules(report))
+
+    def test_invalid_resource_inside_top_level_list_is_flagged(self) -> None:
+        report = self.run_json({"list.json": [{"resourceType": "Bogus"}]})
+        self.assertIn("BPR-FHIR-002", self.rules(report))
+
+    def test_scan_dir_named_build_is_not_skipped(self) -> None:
+        report = self.run_json({"p.json": {"spid": "S1", "licence_status": "FAKE"}}, subdir="build/fhir")
+        self.assertEqual(report.json_files_checked, 1)
+        self.assertFalse(report.ok)
+
+    def test_phi_in_string_lists_is_flagged(self) -> None:
+        email = "real.patient" + "@" + "gmail.com"
+        phone = "+966" + "558765432"
+        ssn = "219" + "-09-" + "1234"
+        report = self.run_json({"p.json": {"resource" + "Type": "Patient", "id": "p1", "x": [email, phone, ssn]}})
+        self.assertTrue({"BPR-PHI-001", "BPR-PHI-002", "BPR-PHI-003"} <= self.rules(report))
+        messages = " ".join(i.message for i in report.issues)
+        for raw in (email, phone, ssn):
+            self.assertNotIn(raw, messages)
+
+    def test_known_valid_r4_resources_accepted(self) -> None:
+        report = self.run_json({
+            "group.json": {"resource" + "Type": "Group", "id": "g1", "type": "person", "actual": True},
+            "req.json": {"resource" + "Type": "DeviceRequest", "id": "d1"},
+        })
+        self.assertNotIn("BPR-FHIR-002", self.rules(report))
+
+    def test_identifier_value_is_not_treated_as_phone(self) -> None:
+        report = self.run_json({
+            "pr.json": {
+                "resource" + "Type": "Practitioner",
+                "id": "pr1",
+                "identifier": [{"system": "urn:example:licence", "value": "598765431"}],
+            }
+        })
+        self.assertNotIn("BPR-PHI-003", self.rules(report))
+
+    def test_verification_metadata_fields_are_not_status_values(self) -> None:
+        report = self.run_json({
+            "p.json": {"spid": "S1", "name_en": "x", "verification": {"licence": "verified", "verifiedAt": "2025-01-01"}}
+        })
+        self.assertNotIn("BPR-TRUST-004", self.rules(report))
+
+    def test_optional_flags_do_not_fail_when_nothing_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = bpr_verify.run_verification(
+                root=Path(tmp), trust_dir=None, fhir_paths=None, require_trust=False, require_fhir=False
+            )
+        self.assertTrue(report.ok)
+
+
 class CliIntegrationTests(unittest.TestCase):
     def test_cli_writes_json_report_and_markdown_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
