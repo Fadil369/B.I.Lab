@@ -47,7 +47,7 @@ jobs:
       min-days: 30
       require-trust: true
       require-fhir: true
-      tools-ref: main
+      tools-ref: v1
 
   healthcare-security:
     uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1
@@ -59,4 +59,4 @@ jobs:
     with:
       codeql-languages: '["javascript-typescript","actions"]'
       phi-fail-on: high
-      tools-ref: main
+      tools-ref: v1
