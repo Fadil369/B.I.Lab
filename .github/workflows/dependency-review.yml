@@ -1,0 +1,37 @@
+# BrainSAIT reusable workflow: Dependency Review (pull requests only)
+# Blocks PRs that add dependencies with known vulnerabilities or disallowed licenses.
+name: Dependency Review
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-severity:
+        description: low, moderate, high or critical
+        type: string
+        default: high
+      deny-licenses:
+        description: Comma-separated SPDX licenses to block
+        type: string
+        default: "AGPL-1.0-only, AGPL-3.0-only, AGPL-3.0-or-later, GPL-3.0-only, GPL-3.0-or-later"
+      comment-summary-in-pr:
+        description: always, on-failure or never
+        type: string
+        default: on-failure
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # PR summary comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          deny-licenses: ${{ inputs.deny-licenses }}
+          comment-summary-in-pr: ${{ inputs.comment-summary-in-pr }}

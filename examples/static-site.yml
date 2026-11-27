@@ -1,0 +1,67 @@
+# Example caller: site quality, CodeQL and Claude Code for a Vite/PHP site.
+name: Site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    uses: Fadil369/B.I.Lab/.github/workflows/node-site.yml@v1
+    with:
+      pre-browser-commands: |
+        npm run build
+        npm test
+      php-version: "8.3"
+      php-extensions: pdo_sqlite, curl, mbstring
+      php-commands: php -l api/index.php
+      browser-commands: npm run test:e2e
+
+  codeql:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    uses: Fadil369/B.I.Lab/.github/workflows/codeql.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      languages: '["javascript-typescript"]'
+
+  claude-mention:
+    if: contains(github.event.comment.body, '@claude')
+    uses: Fadil369/B.I.Lab/.github/workflows/claude-code.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    with:
+      mode: mention
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  claude-review:
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    uses: Fadil369/B.I.Lab/.github/workflows/claude-code.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    with:
+      mode: review
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

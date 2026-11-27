@@ -1,68 +1,74 @@
+# B.I.Lab: BrainSAIT reusable workflow library
 
-## Starter Workflows
+مكتبة سير عمل GitHub Actions القابلة لإعادة الاستخدام لمشاريع BrainSAIT
 
-These are the workflow files for helping people get started with GitHub Actions.  They're presented whenever you start to create a new GitHub Actions workflow.
+Shared GitHub Actions workflows for BrainSAIT repositories. Each file in
+[`.github/workflows/`](.github/workflows) is a **reusable workflow** (`on: workflow_call`),
+so a product repo calls it in a few lines instead of copying CI logic around.
 
-**If you want to get started with GitHub Actions, you can use these starter workflows by clicking the "Actions" tab in the repository where you want to create a workflow.**
+## Workflows
 
+| Workflow | What it does | Key inputs |
+| --- | --- | --- |
+| [`node-ci.yml`](.github/workflows/node-ci.yml) | Install, lint, type-check, test, build a Node / TypeScript project (Next.js, React, Workers code) | `node-version`, `package-manager` (npm/pnpm/yarn), `working-directory`, script names |
+| [`node-site.yml`](.github/workflows/node-site.yml) | Site quality gate: install, caller-supplied commands, optional PHP stage and Playwright Chromium stage, npm audit | `pre-browser-commands`, `php-version`, `php-extensions`, `php-commands`, `browser-commands`, `audit-level` |
+| [`python-ci.yml`](.github/workflows/python-ci.yml) | Ruff lint + format check, mypy, pytest with coverage for Python / FastAPI services | `python-version`, `install-command`, `mypy-target`, `pytest-args` |
+| [`docker-build.yml`](.github/workflows/docker-build.yml) | hadolint, Buildx build with GHA cache, push to `ghcr.io` (never on PRs), SBOM + provenance attestation | `image-name`, `context`, `dockerfile`, `platforms`, `push` |
+| [`cloudflare-workers-deploy.yml`](.github/workflows/cloudflare-workers-deploy.yml) | Test then `wrangler deploy` to a Wrangler environment, behind a GitHub Environment | `working-directory`, `environment`, `dry-run`; secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
+| [`cloudflare-pages-deploy.yml`](.github/workflows/cloudflare-pages-deploy.yml) | Build and `wrangler pages deploy`; PRs get a preview on their branch alias | `project-name`, `output-directory`, `build-command` |
+| [`github-pages-deploy.yml`](.github/workflows/github-pages-deploy.yml) | Optional build, then publish a folder to GitHub Pages | `path`, `build-command` |
+| [`claude-code.yml`](.github/workflows/claude-code.yml) | Claude Code: answers `@claude` mentions, or reviews PRs with the code-review plugin | `mode` (mention/review); secret `CLAUDE_CODE_OAUTH_TOKEN` |
+| [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL analysis per language, results in the Security tab | `languages` (JSON array), `queries` |
+| [`trivy-scan.yml`](.github/workflows/trivy-scan.yml) | Trivy vuln / secret / misconfig scan of the repo or an image, SARIF to the Security tab | `scan-type` (fs/image/config), `scan-ref`, `severity`, `fail-on-findings` |
+| [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Blocks PRs that add vulnerable or copyleft-licensed dependencies | `fail-on-severity`, `deny-licenses` |
+| [`fhir-validate.yml`](.github/workflows/fhir-validate.yml) | **Experimental.** HL7 FHIR R4 validator over test fixtures, optional IGs (e.g. NPHIES packages) | `path`, `fhir-version`, `implementation-guides` |
 
-### Directory structure
+`library-lint.yml` is this repo's own CI (actionlint over every workflow and example). It is not meant to be called.
 
-* [ci](ci): solutions for Continuous Integration workflows
-* [deployments](deployments): solutions for Deployment workflows
-* [automation](automation): solutions for automating workflows
-* [code-scanning](code-scanning): solutions for [Code Scanning](https://github.com/features/security)
-* [pages](pages): solutions for Pages workflows
-* [icons](icons): svg icons for the relevant template
+## Usage
 
-Each workflow must be written in YAML and have a `.yml` extension. They also need a corresponding `.properties.json` file that contains extra metadata about the workflow (this is displayed in the GitHub.com UI).
-
-For example: `ci/django.yml` and `ci/properties/django.properties.json`.
-
-### Valid properties
-
-* `name`: the name shown in onboarding. This property is unique within the repository.
-* `description`: the description shown in onboarding
-* `iconName`: the icon name in the relevant folder, for example, `django` should have an icon `icons/django.svg`. Only SVG is supported at this time. Another option is to use [octicon](https://primer.style/octicons/). The format to use an octicon is `octicon <<icon name>>`. Example: `octicon person`
-* `creator`: creator of the template shown in onboarding. All the workflow templates from an author will have the same `creator` field.
-* `categories`: the categories that it will be shown under. Choose at least one category from the list [here](#categories). Further, choose the categories from the list of languages available [here](https://github.com/github/linguist/blob/master/lib/linguist/languages.yml) and the list of tech stacks available [here](https://github.com/github-starter-workflows/repo-analysis-partner/blob/main/tech_stacks.yml). When a user views the available templates, those templates that match the language and tech stacks will feature more prominently.
-
-### Categories
-* continuous-integration
-* deployment
-* testing
-* code-quality
-* code-review
-* dependency-management
-* monitoring
-* Automation
-* utilities
-* Pages
-* Hugo
-
-### Variables
-These variables can be placed in the starter workflow and will be substituted as detailed below:
-
-* `$default-branch`: will substitute the branch from the repository, for example `main` and `master`
-* `$protected-branches`: will substitute any protected branches from the repository
-* `$cron-daily`: will substitute a valid but random time within the day
-
-## How to test templates before publishing
-
-### Disable template for public
-The template author adds a `labels` array in the template's `properties.json` file with a label `preview`. This will hide the template from users, unless user uses query parameter `preview=true` in the URL.
-Example `properties.json` file:
-```json
-{
-    "name": "Node.js",
-    "description": "Build and test a Node.js project with npm.",
-    "iconName": "nodejs",
-    "categories": ["Continuous integration", "JavaScript", "npm", "React", "Angular", "Vue"],
-    "labels": ["preview"]
-}
+```yaml
+# .github/workflows/ci.yml in a product repo
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    uses: Fadil369/B.I.Lab/.github/workflows/python-ci.yml@v1
+    with:
+      python-version: "3.12"
 ```
 
-For viewing the templates with `preview` label, provide query parameter `preview=true` to the  `new workflow` page URL. Eg. `https://github.com/<owner>/<repo_name>/actions/new?preview=true`.
+Ready-to-copy callers live in [`examples/`](examples):
 
-### Enable template for public
-Remove the `labels` array from `properties.json` file to publish the template to public
+- [`fastapi-service.yml`](examples/fastapi-service.yml): Python CI, then Docker build to GHCR, then Trivy image scan
+- [`cloudflare-worker.yml`](examples/cloudflare-worker.yml): Node CI, then Wrangler deploy (dry run on PRs)
+- [`github-pages-site.yml`](examples/github-pages-site.yml): static site such as `fadil369.github.io`
+- [`static-site.yml`](examples/static-site.yml): site quality gate + CodeQL + Claude mention/review, as used by `fadil369.github.io`
+- [`security.yml`](examples/security.yml): CodeQL + Trivy + dependency review for any repo
+- [`fhir-fixtures.yml`](examples/fhir-fixtures.yml): FHIR validation of example resources
+
+### Notes for callers
+
+- **Permissions.** A reusable workflow can never get more permissions than the calling job grants.
+  Jobs that push images, upload SARIF or deploy Pages must pass the `permissions:` block shown in the examples.
+- **Secrets.** Pass secrets explicitly (as in the examples) rather than `secrets: inherit`, so each workflow only sees what it needs.
+- **Versioning.** Call `@v1` (a tag on this repo) rather than `@main`, so a change here does not break every repo at once.
+  Pin to a commit SHA for production deploys of regulated services.
+- **Private repo access.** If this repository is private, enable
+  *Settings → Actions → General → Access → "Accessible from repositories owned by the user"* so other repos can call it.
+
+## Compliance guardrails (HIPAA / NPHIES)
+
+These workflows are CI/CD plumbing; they do not make an app compliant on their own. They do help:
+
+- Every workflow defaults to `permissions: contents: read` and asks for more only per job.
+- Images ship with SBOM and build provenance, and Trivy checks for leaked secrets and misconfigurations.
+- Deploys run behind GitHub Environments, so production can require approval and keep an audit trail of who deployed what.
+- **Never put PHI in a repository, workflow log, artifact or test fixture.** `fhir-validate.yml` is for synthetic data only.
+
+## Origin
+
+This repo started as a copy of [actions/starter-workflows](https://github.com/actions/starter-workflows) (MIT, see [LICENSE](LICENSE)).
+The original templates were removed and replaced with the BrainSAIT reusable set above.

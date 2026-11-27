@@ -1,0 +1,84 @@
+# BrainSAIT reusable workflow: Cloudflare Workers deploy (Wrangler)
+# Installs deps, optionally runs tests, then `wrangler deploy` to the chosen environment.
+name: Cloudflare Workers Deploy
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding wrangler.toml / wrangler.jsonc (e.g. workers/api)
+        type: string
+        default: "."
+      environment:
+        description: Wrangler environment (--env). Empty deploys the top-level config.
+        type: string
+        default: ""
+      github-environment:
+        description: GitHub Environment used for approvals and scoped secrets
+        type: string
+        default: production
+      node-version:
+        type: string
+        default: "20"
+      wrangler-version:
+        type: string
+        default: "3"
+      test-script:
+        description: npm script run before deploy. Empty skips tests.
+        type: string
+        default: test
+      dry-run:
+        description: Build and validate only (wrangler deploy --dry-run)
+        type: boolean
+        default: false
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+    outputs:
+      deployment-url:
+        description: URL reported by Wrangler
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cf-workers-${{ github.repository }}-${{ inputs.working-directory }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ !inputs.dry-run && inputs.github-environment || '' }}
+    outputs:
+      deployment-url: ${{ steps.wrangler.outputs.deployment-url }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; fi
+
+      - name: Test
+        if: inputs.test-script != ''
+        run: |
+          if [ -f package.json ]; then npm run "${{ inputs.test-script }}" --if-present; fi
+
+      - id: wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ inputs.working-directory }}
+          wranglerVersion: ${{ inputs.wrangler-version }}
+          environment: ${{ inputs.environment }}
+          command: deploy ${{ inputs.dry-run && '--dry-run' || '' }}

@@ -1,0 +1,38 @@
+# Example caller: weekly + per-PR security checks for any BrainSAIT repo.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    uses: Fadil369/B.I.Lab/.github/workflows/codeql.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      languages: '["javascript-typescript","python","actions"]'
+
+  trivy:
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+
+  dependencies:
+    if: github.event_name == 'pull_request'
+    uses: Fadil369/B.I.Lab/.github/workflows/dependency-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write

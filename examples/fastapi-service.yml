@@ -1,0 +1,43 @@
+# Example caller: a FastAPI service with a Dockerfile.
+# Copy to .github/workflows/ci.yml in the service repo.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: Fadil369/B.I.Lab/.github/workflows/python-ci.yml@v1
+    with:
+      python-version: "3.12"
+      mypy-target: app
+
+  image:
+    needs: test
+    uses: Fadil369/B.I.Lab/.github/workflows/docker-build.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+  scan-image:
+    needs: image
+    if: github.event_name != 'pull_request'
+    uses: Fadil369/B.I.Lab/.github/workflows/trivy-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      scan-type: image
+      scan-ref: ${{ needs.image.outputs.image }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

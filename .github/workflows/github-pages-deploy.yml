@@ -1,0 +1,65 @@
+# BrainSAIT reusable workflow: GitHub Pages deploy
+# Optionally builds the site, then publishes a directory to GitHub Pages.
+# The caller repo must set Settings > Pages > Source to "GitHub Actions".
+name: GitHub Pages Deploy
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Directory to publish ("." for a plain static repo, or dist/out/_site)
+        type: string
+        default: "."
+      build-command:
+        description: Build command. Empty publishes files as they are.
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: "20"
+    outputs:
+      page-url:
+        value: ${{ jobs.deploy.outputs.page-url }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        if: inputs.build-command != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.path }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page-url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

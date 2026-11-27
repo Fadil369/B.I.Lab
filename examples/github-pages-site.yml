@@ -1,0 +1,20 @@
+# Example caller: a static site such as fadil369.github.io.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: Fadil369/B.I.Lab/.github/workflows/github-pages-deploy.yml@v1
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    with:
+      path: "."
