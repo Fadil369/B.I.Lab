@@ -1,0 +1,62 @@
+# Example caller: BPR web hub & public trust portal (e.g. Fadil369/fadil369.github.io).
+# Copy to .github/workflows/site-quality.yml in the web hub repository.
+name: BPR Web Hub Quality & Trust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"   # weekly PKI expiry & CVE check
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-site:
+    uses: Fadil369/B.I.Lab/.github/workflows/node-site.yml@v1
+    permissions:
+      contents: read
+    with:
+      node-version: "24"
+      pre-browser-commands: |
+        npm test
+        npm run verify:clinical-marketplace
+        npm run test:acp
+        npm run verify:bpr-releases
+        npm run landing && git diff --exit-code -- index.html ar/index.html
+        npm run build
+        npm run verify:published
+      php-version: "8.3"
+      php-extensions: pdo_sqlite, curl, mbstring
+      php-commands: php build-apply/tests/run.php
+      browser-commands: |
+        npm run verify:bpr-ux
+        npm run verify:experience
+      audit-level: high
+      timeout-minutes: 25
+
+  bpr-trust:
+    uses: Fadil369/B.I.Lab/.github/workflows/bpr-trust-fhir-verify.yml@v1
+    permissions:
+      contents: read
+    with:
+      trust-dir: "trust"
+      fhir-paths: "public/assets/bpr-data"
+      min-days: 30
+      require-trust: true
+      require-fhir: true
+      tools-ref: v1
+
+  healthcare-security:
+    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      codeql-languages: '["javascript-typescript","actions"]'
+      phi-fail-on: high
+      tools-ref: v1

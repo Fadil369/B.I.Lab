@@ -1,0 +1,486 @@
+# BrainSAIT reusable workflow: Android Release & BPR Ecosystem Distribution
+#
+# Builds release APKs for multi-module Android suites (default: :app-clinician and :app-patient),
+# supports optional keystore signing with graceful fallback when keystore secrets are absent,
+# emits SHA256SUMS.txt + bpr-release-manifest.json, attests SLSA build provenance,
+# publishes/updates a GitHub Release, and optionally dispatches bpr-android-release to a downstream
+# web hub (e.g. Fadil369/fadil369.github.io).
+#
+# Security guarantees:
+#   - Every third-party action is pinned to a full 40-char commit SHA (Node 24 majors).
+#   - Zero ${{ ... }} interpolation inside run: shell scripts; all inputs/secrets pass via env:.
+#   - Temporary keystore material is wiped in an always() cleanup step.
+name: Android Release
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: Temurin JDK version to install (e.g. "17" or "21").
+        type: string
+        default: "17"
+      working-directory:
+        description: Relative path to the Gradle root project containing gradlew.
+        type: string
+        default: "."
+      modules:
+        description: Whitespace- or comma-separated Android app modules to assembleRelease (e.g. ":app-clinician :app-patient").
+        type: string
+        default: ":app-clinician :app-patient"
+      gradle-release-tasks:
+        description: Explicit Gradle release tasks override (when empty, derived from modules as <module>:assembleRelease).
+        type: string
+        default: ""
+      gradle-extra-args:
+        description: Extra safe Gradle CLI flags (e.g. "--stacktrace").
+        type: string
+        default: ""
+      apk-glob:
+        description: Glob (relative to working-directory) matching built release APKs.
+        type: string
+        default: "**/build/outputs/apk/release/*.apk"
+      suite-name:
+        description: Logical suite identifier recorded in bpr-release-manifest.json.
+        type: string
+        default: "brainsait-clinical-android"
+      fhir-version:
+        description: FHIR specification version recorded in bpr-release-manifest.json.
+        type: string
+        default: "4.0.1"
+      nphies-profile:
+        description: NPHIES profile identifier recorded in bpr-release-manifest.json.
+        type: string
+        default: "ksa/nphies-fs"
+      version:
+        description: Explicit release version/tag (defaults to github.ref_name on tag push, or sha-<short> on branch dispatch).
+        type: string
+        default: ""
+      create-release:
+        description: Create or update a GitHub Release when running on a tag or when version input is set.
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the GitHub Release as a pre-release.
+        type: boolean
+        default: false
+      attest:
+        description: Generate SLSA build provenance attestations via actions/attest-build-provenance.
+        type: boolean
+        default: true
+      attest-private:
+        description: Run provenance attestation even on private repositories (requires GitHub Enterprise Cloud).
+        type: boolean
+        default: false
+      dispatch-repo:
+        description: Optional owner/repo to notify via repository_dispatch (e.g. "Fadil369/fadil369.github.io").
+        type: string
+        default: ""
+      dispatch-event-type:
+        description: repository_dispatch event_type sent to dispatch-repo.
+        type: string
+        default: "bpr-android-release"
+      artifact-retention-days:
+        description: Days to retain built release APKs, SHA256SUMS.txt, and manifest artifacts.
+        type: number
+        default: 90
+      timeout-minutes:
+        description: Maximum job runtime in minutes.
+        type: number
+        default: 40
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        description: Base64-encoded JKS/PKCS12 release keystore (optional; falls back to debug/unsigned when omitted).
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        description: Keystore password matching ANDROID_KEYSTORE_BASE64.
+        required: false
+      ANDROID_KEY_ALIAS:
+        description: Signing key alias inside the keystore.
+        required: false
+      ANDROID_KEY_PASSWORD:
+        description: Password for ANDROID_KEY_ALIAS.
+        required: false
+      DISPATCH_TOKEN:
+        description: Fine-grained PAT with Contents write (or repository_dispatch) on dispatch-repo.
+        required: false
+    outputs:
+      version:
+        description: Resolved release version/tag.
+        value: ${{ jobs.release.outputs.version }}
+      release-url:
+        description: Published GitHub Release HTML URL (if created).
+        value: ${{ jobs.release.outputs.release_url }}
+      signing-mode:
+        description: Effective APK signing mode (release-keystore or fallback).
+        value: ${{ jobs.release.outputs.signing_mode }}
+      manifest-json:
+        description: Compact JSON content of bpr-release-manifest.json.
+        value: ${{ jobs.release.outputs.manifest_json }}
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Android Release & Manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_url: ${{ steps.gh_release.outputs.release_url }}
+      signing_mode: ${{ steps.keystore.outputs.signing_mode }}
+      manifest_json: ${{ steps.manifest.outputs.manifest_json }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release version metadata
+        id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_VERSION" ]]; then
+            ver="$INPUT_VERSION"
+            is_tag_or_explicit="true"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            ver="$REF_NAME"
+            is_tag_or_explicit="true"
+          else
+            ver="0.0.0-${GITHUB_SHA::8}"
+            is_tag_or_explicit="false"
+          fi
+          if [[ ! "$ver" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error title=Invalid version::Disallowed characters in release version: $ver"
+            exit 2
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "can_publish_release=$is_tag_or_explicit" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Temurin JDK
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle with caching
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Configure Android SDK and optional release keystore
+        id: keystore
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -n "$sdk_dir" && -d "$sdk_dir" ]]; then
+            mkdir -p "$sdk_dir/licenses"
+            printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$sdk_dir/licenses/android-sdk-license"
+          fi
+          if [[ -f local.properties ]]; then
+            cp local.properties .local.properties.ci.bak
+            grep -v '^sdk\.dir=' local.properties > local.properties.ci || true
+            mv local.properties.ci local.properties
+          fi
+          if [[ -n "$KS_B64" && -n "$KS_PASS" && -n "$KEY_ALIAS" && -n "$KEY_PASS" ]]; then
+            python3 - <<'PY'
+          import base64
+          import os
+          import pathlib
+
+          raw = base64.b64decode(os.environ["KS_B64"].strip())
+          ks_path = pathlib.Path(".ci-release.jks")
+          ks_path.write_bytes(raw)
+          os.chmod(ks_path, 0o600)
+
+          def esc(val: str) -> str:
+              return val.replace("\\", "\\\\").replace("\n", "")
+
+          lines = []
+          lp = pathlib.Path("local.properties")
+          if lp.exists():
+              lines = [
+                  ln for ln in lp.read_text(encoding="utf-8").splitlines()
+                  if not ln.startswith(("RELEASE_STORE_FILE=", "RELEASE_STORE_PASSWORD=", "RELEASE_KEY_ALIAS=", "RELEASE_KEY_PASSWORD="))
+              ]
+          lines.extend([
+              "RELEASE_STORE_FILE=.ci-release.jks",
+              f"RELEASE_STORE_PASSWORD={esc(os.environ['KS_PASS'])}",
+              f"RELEASE_KEY_ALIAS={esc(os.environ['KEY_ALIAS'])}",
+              f"RELEASE_KEY_PASSWORD={esc(os.environ['KEY_PASS'])}",
+          ])
+          lp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          os.chmod(lp, 0o600)
+          PY
+            echo "signing_mode=release-keystore" >> "$GITHUB_OUTPUT"
+            echo "Configured release keystore (.ci-release.jks)"
+          else
+            echo "signing_mode=fallback" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Signing fallback::ANDROID_KEYSTORE_* secrets not fully configured; using project fallback/debug or unsigned release configuration."
+          fi
+
+      - name: Assemble release APKs
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          MODULES: ${{ inputs.modules }}
+          EXPLICIT_TASKS: ${{ inputs.gradle-release-tasks }}
+          GRADLE_EXTRA: ${{ inputs.gradle-extra-args }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          task_arr=()
+          if [[ -n "$EXPLICIT_TASKS" ]]; then
+            read -r -a task_arr <<< "$EXPLICIT_TASKS"
+          else
+            normalized="${MODULES//,/ }"
+            read -r -a mod_arr <<< "$normalized"
+            for mod in "${mod_arr[@]}"; do
+              [[ -z "$mod" ]] && continue
+              mod_clean=":${mod#:}"
+              task_arr+=("${mod_clean}:assembleRelease")
+            done
+          fi
+          if [[ ${#task_arr[@]} -eq 0 ]]; then
+            task_arr=("assembleRelease")
+          fi
+          read -r -a extra_arr <<< "$GRADLE_EXTRA"
+          for tok in "${task_arr[@]}" "${extra_arr[@]}"; do
+            [[ -z "$tok" ]] && continue
+            if [[ ! "$tok" =~ ^[A-Za-z0-9_:./=-]+$ ]]; then
+              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: $tok"
+              exit 2
+            fi
+          done
+          ./gradlew --no-daemon "${extra_arr[@]}" "${task_arr[@]}"
+
+      - name: Wipe temporary keystore material
+        if: always()
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          rm -f .ci-release.jks
+          if [[ -f .local.properties.ci.bak ]]; then
+            mv .local.properties.ci.bak local.properties
+          else
+            rm -f local.properties
+          fi
+
+      - name: Stage artifacts, SHA256SUMS.txt, and bpr-release-manifest.json
+        id: manifest
+        env:
+          WORK_DIR: ${{ inputs.working-directory }}
+          APK_GLOB: ${{ inputs.apk-glob }}
+          SUITE_NAME: ${{ inputs.suite-name }}
+          FHIR_VERSION: ${{ inputs.fhir-version }}
+          NPHIES_PROFILE: ${{ inputs.nphies-profile }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SIGNING_MODE: ${{ steps.keystore.outputs.signing_mode }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime as dt
+          import glob
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import sys
+
+          work_dir = pathlib.Path(os.environ["WORK_DIR"])
+          pattern = str(work_dir / os.environ["APK_GLOB"])
+          matched = sorted(pathlib.Path(p) for p in glob.glob(pattern, recursive=True) if pathlib.Path(p).is_file())
+          if not matched:
+              print(f"::error title=No release APKs found::No APK matched '{pattern}'", file=sys.stderr)
+              sys.exit(1)
+
+          dist_dir = pathlib.Path("bpr-release-dist")
+          if dist_dir.exists():
+              shutil.rmtree(dist_dir)
+          dist_dir.mkdir(parents=True)
+
+          artifacts = []
+          apps = {}
+          checksum_lines = []
+          seen_names = set()
+
+          for src in matched:
+              rel_parts = src.relative_to(work_dir).parts
+              module_name = rel_parts[0] if len(rel_parts) > 1 else src.stem
+              dest_name = src.name
+              if dest_name in seen_names:
+                  dest_name = f"{module_name}-{src.name}"
+              seen_names.add(dest_name)
+              dest = dist_dir / dest_name
+              shutil.copy2(src, dest)
+
+              digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+              size_bytes = dest.stat().st_size
+              checksum_lines.append(f"{digest}  {dest_name}")
+              entry = {
+                  "module": module_name,
+                  "name": dest_name,
+                  "sha256": digest,
+                  "sizeBytes": size_bytes,
+              }
+              artifacts.append(entry)
+              apps[module_name] = {
+                  "apk": dest_name,
+                  "sha256": digest,
+                  "sizeBytes": size_bytes,
+              }
+
+          version = os.environ["VERSION"]
+          repo = os.environ["REPO"]
+          server_url = os.environ["SERVER_URL"].rstrip("/")
+          release_url = f"{server_url}/{repo}/releases/tag/{version}"
+          timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          manifest = {
+              "schemaVersion": "1.0",
+              "suite": os.environ["SUITE_NAME"],
+              "fhirVersion": os.environ["FHIR_VERSION"],
+              "nphiesProfile": os.environ["NPHIES_PROFILE"],
+              "repository": repo,
+              "version": version,
+              "commitSha": os.environ["GITHUB_SHA"],
+              "timestamp": timestamp,
+              "signingMode": os.environ["SIGNING_MODE"],
+              "releaseUrl": release_url,
+              "apps": apps,
+              "artifacts": artifacts,
+          }
+
+          manifest_text = json.dumps(manifest, indent=2) + "\n"
+          (dist_dir / "bpr-release-manifest.json").write_text(manifest_text, encoding="utf-8")
+
+          manifest_digest = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+          checksum_lines.append(f"{manifest_digest}  bpr-release-manifest.json")
+          (dist_dir / "SHA256SUMS.txt").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+
+          compact = json.dumps(manifest, separators=(",", ":"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"manifest_json={compact}\n")
+              out.write(f"expected_release_url={release_url}\n")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"## Android Release (`{version}`)\n\n")
+              summary.write(f"- **Suite:** `{manifest['suite']}`\n")
+              summary.write(f"- **Commit:** `{manifest['commitSha']}`\n")
+              summary.write(f"- **Signing mode:** `{manifest['signingMode']}`\n\n")
+              summary.write("| Module | Artifact | Size (bytes) | SHA-256 |\n|---|---|---|---|\n")
+              for item in artifacts:
+                  summary.write(
+                      f"| `{item['module']}` | `{item['name']}` | {item['sizeBytes']:,} | `{item['sha256']}` |\n"
+                  )
+          PY
+
+      - name: Attest SLSA build provenance
+        if: inputs.attest && (!github.event.repository.private || inputs.attest-private)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            bpr-release-dist/*.apk
+            bpr-release-dist/bpr-release-manifest.json
+            bpr-release-dist/SHA256SUMS.txt
+
+      - name: Upload release distribution artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bpr-android-release-${{ steps.meta.outputs.version }}
+          path: bpr-release-dist/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: Create or update GitHub Release
+        id: gh_release
+        if: inputs.create-release && steps.meta.outputs.can_publish_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          EXPECTED_URL: ${{ steps.manifest.outputs.expected_release_url }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git tag "$TAG" "$GITHUB_SHA"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/tags/${TAG}"
+          fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" bpr-release-dist/* --clobber --repo "$REPO"
+          else
+            rel_args=("$TAG" bpr-release-dist/* --repo "$REPO" --title "$TAG" --generate-notes)
+            if [[ "$PRERELEASE" == "true" ]]; then
+              rel_args+=(--prerelease)
+            fi
+            gh release create "${rel_args[@]}"
+          fi
+          url="$(gh release view "$TAG" --repo "$REPO" --json url --jq '.url' || echo "$EXPECTED_URL")"
+          echo "release_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release metadata to ecosystem hub
+        if: inputs.dispatch-repo != ''
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          DISPATCH_REPO: ${{ inputs.dispatch-repo }}
+          EVENT_TYPE: ${{ inputs.dispatch-event-type }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          RELEASE_URL: ${{ steps.gh_release.outputs.release_url || steps.manifest.outputs.expected_release_url }}
+          SUITE_NAME: ${{ inputs.suite-name }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DISPATCH_TOKEN" ]]; then
+            echo "::notice title=Dispatch skipped::DISPATCH_TOKEN secret is not set; skipping repository_dispatch to ${DISPATCH_REPO}."
+            exit 0
+          fi
+          if [[ ! "$DISPATCH_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error title=Invalid dispatch-repo::Expected owner/repo format, got: ${DISPATCH_REPO}"
+            exit 2
+          fi
+          python3 - <<'PY' > "$RUNNER_TEMP/dispatch-payload.json"
+          import json
+          import os
+          import pathlib
+
+          manifest = json.loads(pathlib.Path("bpr-release-dist/bpr-release-manifest.json").read_text(encoding="utf-8"))
+          payload = {
+              "event_type": os.environ["EVENT_TYPE"],
+              "client_payload": {
+                  "suite": os.environ["SUITE_NAME"],
+                  "repository": os.environ["SOURCE_REPO"],
+                  "version": os.environ["VERSION"],
+                  "commit_sha": os.environ["GITHUB_SHA"],
+                  "release_url": os.environ["RELEASE_URL"],
+                  "manifest": manifest,
+                  "manifest_json": json.dumps(manifest, separators=(",", ":")),
+              },
+          }
+          print(json.dumps(payload))
+          PY
+          GH_TOKEN="$DISPATCH_TOKEN" gh api \
+            --method POST \
+            "repos/${DISPATCH_REPO}/dispatches" \
+            --input "$RUNNER_TEMP/dispatch-payload.json"
+          echo "Dispatched ${EVENT_TYPE} (${VERSION}) to ${DISPATCH_REPO}"

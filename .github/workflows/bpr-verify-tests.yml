@@ -1,0 +1,39 @@
+# Internal CI for this library (not reusable): unit tests for script/bpr-verify.
+name: bpr-verify tests
+
+on:
+  pull_request:
+    paths:
+      - "script/bpr-verify/**"
+      - ".github/workflows/bpr-verify-tests.yml"
+      - ".github/workflows/bpr-trust-fhir-verify.yml"
+  push:
+    branches: [main]
+    paths:
+      - "script/bpr-verify/**"
+      - ".github/workflows/bpr-verify-tests.yml"
+      - ".github/workflows/bpr-trust-fhir-verify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: bpr-verify unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run bpr_verify unit test suite
+        run: python -m unittest -v script/bpr-verify/test_bpr_verify.py
