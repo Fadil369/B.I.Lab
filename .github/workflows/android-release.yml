@@ -111,7 +111,7 @@ on:
         description: Published GitHub Release HTML URL (if created).
         value: ${{ jobs.release.outputs.release_url }}
       signing-mode:
-        description: Effective APK signing mode (release-keystore or fallback).
+        description: Effective APK signing mode (release-keystore, release-keystore-unverified, keystore-not-applied, or fallback). Verified against the APK signer certificate when apksigner is available.
         value: ${{ jobs.release.outputs.signing_mode }}
       manifest-json:
         description: Compact JSON content of bpr-release-manifest.json.
@@ -132,7 +132,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       release_url: ${{ steps.gh_release.outputs.release_url }}
-      signing_mode: ${{ steps.keystore.outputs.signing_mode }}
+      signing_mode: ${{ steps.verify_signing.outputs.signing_mode || steps.keystore.outputs.signing_mode }}
       manifest_json: ${{ steps.manifest.outputs.manifest_json }}
     steps:
       - name: Check out repository
@@ -159,8 +159,9 @@ jobs:
             ver="0.0.0-${GITHUB_SHA::8}"
             is_tag_or_explicit="false"
           fi
-          if [[ ! "$ver" =~ ^[A-Za-z0-9._+-]+$ ]]; then
-            echo "::error title=Invalid version::Disallowed characters in release version: $ver"
+          if [[ ! "$ver" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            # Strip anything unsafe before echoing so the value cannot inject workflow commands.
+            echo "::error title=Invalid version::Release version must start with a letter or digit and use only A-Z a-z 0-9 . _ + - (got: ${ver//[^A-Za-z0-9._+-]/?})"
             exit 2
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
@@ -205,7 +206,7 @@ jobs:
           import pathlib
 
           raw = base64.b64decode(os.environ["KS_B64"].strip())
-          ks_path = pathlib.Path(".ci-release.jks")
+          ks_path = pathlib.Path(".ci-release.jks").resolve()
           ks_path.write_bytes(raw)
           os.chmod(ks_path, 0o600)
 
@@ -220,7 +221,8 @@ jobs:
                   if not ln.startswith(("RELEASE_STORE_FILE=", "RELEASE_STORE_PASSWORD=", "RELEASE_KEY_ALIAS=", "RELEASE_KEY_PASSWORD="))
               ]
           lines.extend([
-              "RELEASE_STORE_FILE=.ci-release.jks",
+              # Absolute: Gradle resolves relative paths against each module, not this directory.
+              f"RELEASE_STORE_FILE={esc(str(ks_path))}",
               f"RELEASE_STORE_PASSWORD={esc(os.environ['KS_PASS'])}",
               f"RELEASE_KEY_ALIAS={esc(os.environ['KEY_ALIAS'])}",
               f"RELEASE_KEY_PASSWORD={esc(os.environ['KEY_PASS'])}",
@@ -265,11 +267,46 @@ jobs:
           for tok in "${task_arr[@]}" "${extra_arr[@]}"; do
             [[ -z "$tok" ]] && continue
             if [[ ! "$tok" =~ ^[A-Za-z0-9_:./=-]+$ ]]; then
-              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: $tok"
+              echo "::error title=Invalid Gradle argument::Disallowed token in Gradle arguments: ${tok//[^A-Za-z0-9_:.\/=-]/?}"
               exit 2
             fi
           done
           ./gradlew --no-daemon "${extra_arr[@]}" "${task_arr[@]}"
+
+      - name: Verify effective APK signing
+        id: verify_signing
+        if: steps.keystore.outputs.signing_mode == 'release-keystore'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          APK_GLOB: ${{ inputs.apk-glob }}
+        run: |
+          set -euo pipefail
+          # The keystore is only wired in through local.properties; a project that ignores
+          # RELEASE_STORE_* would silently ship debug/unsigned APKs. Compare the real signer
+          # certificate of every APK with the keystore certificate before claiming release signing.
+          norm() { tr -d ': \r' | tr 'A-F' 'a-f'; }
+          want="$(keytool -list -keystore .ci-release.jks -storepass:env KS_PASS -alias "$KEY_ALIAS" 2>/dev/null \
+            | sed -n 's/.*(SHA-256): *//p' | head -n 1 | norm || true)"
+          apksigner="$(find "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/nonexistent}}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+          shopt -s globstar nullglob
+          # shellcheck disable=SC2206 # intentional glob expansion of the apk-glob input
+          apks=( $APK_GLOB )
+          mode="release-keystore"
+          if [[ -z "$want" || -z "$apksigner" || ${#apks[@]} -eq 0 ]]; then
+            mode="release-keystore-unverified"
+            echo "::warning title=Signing unverified::Could not compare APK signer with the keystore (keytool/apksigner/APKs unavailable)."
+          else
+            for apk in "${apks[@]}"; do
+              got="$("$apksigner" verify --print-certs "$apk" 2>/dev/null | sed -n 's/.*certificate SHA-256 digest: *//p' | head -n 1 | norm || true)"
+              if [[ "$got" != "$want" ]]; then
+                mode="keystore-not-applied"
+                echo "::warning title=Release keystore not applied::${apk##*/} is not signed with the configured keystore; the project may ignore RELEASE_STORE_* properties."
+              fi
+            done
+          fi
+          echo "signing_mode=$mode" >> "$GITHUB_OUTPUT"
 
       - name: Wipe temporary keystore material
         if: always()
@@ -292,7 +329,7 @@ jobs:
           FHIR_VERSION: ${{ inputs.fhir-version }}
           NPHIES_PROFILE: ${{ inputs.nphies-profile }}
           VERSION: ${{ steps.meta.outputs.version }}
-          SIGNING_MODE: ${{ steps.keystore.outputs.signing_mode }}
+          SIGNING_MODE: ${{ steps.verify_signing.outputs.signing_mode || steps.keystore.outputs.signing_mode }}
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -330,6 +367,11 @@ jobs:
               dest_name = src.name
               if dest_name in seen_names:
                   dest_name = f"{module_name}-{src.name}"
+              n = 2
+              base_name = dest_name
+              while dest_name in seen_names:
+                  dest_name = f"{n}-{base_name}"
+                  n += 1
               seen_names.add(dest_name)
               dest = dist_dir / dest_name
               shutil.copy2(src, dest)
@@ -344,7 +386,8 @@ jobs:
                   "sizeBytes": size_bytes,
               }
               artifacts.append(entry)
-              apps[module_name] = {
+              app_key = module_name if module_name not in apps else f"{module_name}/{dest_name}"
+              apps[app_key] = {
                   "apk": dest_name,
                   "sha256": digest,
                   "sizeBytes": size_bytes,
