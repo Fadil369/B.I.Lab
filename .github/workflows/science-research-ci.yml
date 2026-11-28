@@ -1,0 +1,191 @@
+# BrainSAIT reusable workflow: Antigravity for Science & Biomedical Research CI
+#
+# Runs uv-managed Python biomedical/scientific pipelines and tests, validates research
+# artifacts across Genomics, Structural Biology, Chemistry, and Scientific Literature /
+# Zenodo RDM provenance using script/science-lab/science_lab_verify.py, writes a concise
+# Markdown summary to $GITHUB_STEP_SUMMARY, and uploads science-lab-report.json.
+#
+# Documentation: docs/science-lab.md
+# Example caller: examples/science-research-pipeline.yml
+name: Science Research CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version managed by uv (default 3.12).
+        type: string
+        default: "3.12"
+      uv-version:
+        description: Specific uv version to install (empty uses pyproject.toml or latest release).
+        type: string
+        default: ""
+      working-directory:
+        description: Relative directory inside the calling repository for uv commands.
+        type: string
+        default: "."
+      enable-cache:
+        description: Enable GitHub Actions dependency caching for uv.
+        type: boolean
+        default: true
+      sync-command:
+        description: Custom dependency sync command (auto-runs `uv sync` when pyproject.toml exists if empty).
+        type: string
+        default: ""
+      pipeline-command:
+        description: Optional `uv run ...` scientific analysis or artifact-generation command.
+        type: string
+        default: ""
+      test-command:
+        description: Optional `uv run ...` test command (e.g. `uv run pytest -q`).
+        type: string
+        default: ""
+      verify-artifacts:
+        description: Run science_lab_verify.py across Genomics, Structural Biology, Chemistry, and Zenodo RDM artifacts.
+        type: boolean
+        default: true
+      verify-path:
+        description: Relative path inside caller repository to inspect with science_lab_verify.py.
+        type: string
+        default: "."
+      pillars:
+        description: Comma-separated pillars to validate or 'all' (genomics,structural-biology,chemistry,literature-zenodo).
+        type: string
+        default: "all"
+      require-citation:
+        description: Fail verification if neither CITATION.cff nor zenodo*.json is present.
+        type: boolean
+        default: false
+      fail-on:
+        description: Lowest finding severity that fails verification (low, medium, high, none).
+        type: string
+        default: "medium"
+      artifact-retention-days:
+        description: Days to retain the uploaded science-lab-report.json artifact.
+        type: number
+        default: 90
+      tools-ref:
+        description: Git ref of Fadil369/B.I.Lab to load script/science-lab from (default v1).
+        type: string
+        default: "v1"
+    secrets:
+      tools-token:
+        description: Optional token with read access to Fadil369/B.I.Lab (only needed while B.I.Lab is private).
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  research-ci:
+    name: Science Research & Provenance CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out calling repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Check out science-lab verifier from B.I.Lab
+        if: inputs.verify-artifacts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Fadil369/B.I.Lab
+          ref: ${{ inputs.tools-ref }}
+          token: ${{ secrets.tools-token || github.token }}
+          path: tools
+          persist-credentials: false
+          sparse-checkout: script/science-lab
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: ${{ inputs.python-version }}
+          version: ${{ inputs.uv-version }}
+          enable-cache: ${{ inputs.enable-cache && 'true' || 'false' }}
+          cache-dependency-glob: |
+            src/**/*requirements*.txt
+            src/**/*requirements*.in
+            src/**/pyproject.toml
+            src/**/uv.lock
+          ignore-nothing-to-cache: "true"
+          ignore-empty-workdir: "true"
+
+      - name: Sync uv environment
+        env:
+          WORKING_DIR: ${{ inputs.working-directory }}
+          SYNC_COMMAND: ${{ inputs.sync-command }}
+        run: |
+          set -euo pipefail
+          cd "src/${WORKING_DIR}"
+          if [[ -n "$SYNC_COMMAND" ]]; then
+            bash -euo pipefail -c "$SYNC_COMMAND"
+          elif [[ -f uv.lock ]]; then
+            uv sync --frozen
+          elif [[ -f pyproject.toml ]]; then
+            uv sync
+          else
+            echo "No pyproject.toml found in src/${WORKING_DIR}; skipping project sync (PEP 723 inline uv scripts supported)."
+          fi
+
+      - name: Run scientific pipeline command
+        if: inputs.pipeline-command != ''
+        env:
+          WORKING_DIR: ${{ inputs.working-directory }}
+          PIPELINE_COMMAND: ${{ inputs.pipeline-command }}
+        run: |
+          set -euo pipefail
+          cd "src/${WORKING_DIR}"
+          bash -euo pipefail -c "$PIPELINE_COMMAND"
+
+      - name: Run test suite
+        if: inputs.test-command != ''
+        env:
+          WORKING_DIR: ${{ inputs.working-directory }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          set -euo pipefail
+          cd "src/${WORKING_DIR}"
+          bash -euo pipefail -c "$TEST_COMMAND"
+
+      - name: Verify biomedical artifacts and Zenodo RDM provenance
+        if: always() && inputs.verify-artifacts
+        env:
+          VERIFY_PATH: ${{ inputs.verify-path }}
+          PILLARS: ${{ inputs.pillars }}
+          REQUIRE_CITATION: ${{ inputs.require-citation }}
+          FAIL_ON: ${{ inputs.fail-on }}
+        run: |
+          set -uo pipefail
+          cmd=(
+            uv run --no-project python tools/script/science-lab/science_lab_verify.py
+            --root "src/${VERIFY_PATH}"
+            --pillars "$PILLARS"
+            --fail-on "$FAIL_ON"
+            --output science-lab-report.json
+            --markdown-summary "$GITHUB_STEP_SUMMARY"
+          )
+          if [[ "$REQUIRE_CITATION" == "true" ]]; then
+            cmd+=(--require-citation)
+          else
+            cmd+=(--no-require-citation)
+          fi
+          "${cmd[@]}"
+          status=$?
+          if [[ $status -ne 0 ]]; then
+            echo "::error title=Science Lab verification failed::science_lab_verify.py found research artifact or Zenodo RDM governance errors at or above '${FAIL_ON}'. Inspect the step summary and science-lab-report artifact."
+          fi
+          exit "$status"
+
+      - name: Upload Science Lab JSON report
+        if: always() && inputs.verify-artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: science-lab-report
+          path: science-lab-report.json
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}

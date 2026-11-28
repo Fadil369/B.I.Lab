@@ -1,0 +1,43 @@
+# Example caller: Antigravity for Science research pipeline + Healthcare Security Scan
+# for BrainSAIT genomics, structural biology, cheminformatics, and clinical-literature repos.
+name: Science Research & Security Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"   # weekly dependency, CVE, and artifact provenance check
+
+permissions:
+  contents: read
+
+jobs:
+  science-research:
+    uses: Fadil369/B.I.Lab/.github/workflows/science-research-ci.yml@v1
+    permissions:
+      contents: read
+    with:
+      python-version: "3.12"
+      enable-cache: true
+      pipeline-command: "uv run python scripts/verify_study_outputs.py"
+      test-command: "uv run pytest -q"
+      verify-artifacts: true
+      pillars: "all"
+      require-citation: true
+      fail-on: medium
+    secrets:
+      tools-token: ${{ secrets.BILAB_READ_TOKEN }}   # only needed while B.I.Lab is private
+
+  healthcare-security:
+    uses: Fadil369/B.I.Lab/.github/workflows/healthcare-security-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      codeql-languages: '["python","actions"]'
+      phi-fail-on: medium
+    secrets:
+      tools-token: ${{ secrets.BILAB_READ_TOKEN }}   # only needed while B.I.Lab is private
