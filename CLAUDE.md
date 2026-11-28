@@ -13,6 +13,7 @@ BrainSAIT reusable GitHub Actions workflow library (`Fadil369/B.I.Lab`). No app 
 ## Commands
 - Lint workflows (same as CI): `actionlint -color .github/workflows/*.yml examples/*.yml` (CI uses v1.7.7)
 - Static workflow security checks (CI runs this too): `python3 script/lint_workflows.py` (fails on `${{ }}` inside `run:` blocks and on non-SHA-pinned third-party actions)
+- Convention guard (CI runs `check`): `python3 script/guard_workflows.py check --include-examples`; tests: `python3 -m unittest -v script/test_guard_workflows.py`. Network helpers: `python3 script/guard_workflows.py resolve actions/checkout@v7` prints the SHA pin, `python3 script/guard_workflows.py fix [--commit]` rewrites tag-based `uses:` to SHA pins in place.
 - bpr-verify tests: `python -m unittest -v script/bpr-verify/test_bpr_verify.py`
 - phi-scan tests: `python -m unittest discover -s script/phi-scan -v` and `cd script/phi-scan && python -m doctest -v phi_scan.py`
 - Self-scan, must stay clean: `python script/phi-scan/phi_scan.py --root . --fail-on medium` (exit 1 = findings, 2 = usage error). Suppress a line inline with `phi-scan:ignore`.
