@@ -53,6 +53,8 @@ Ready-to-copy callers live in [`examples/`](examples):
 - [`security.yml`](examples/security.yml): CodeQL + Trivy + dependency review for any repo
 - [`healthcare-security.yml`](examples/healthcare-security.yml): the healthcare bundle (secrets, dependencies, image, CodeQL, possible PHI) for repos that touch patient or claims data
 - [`fhir-fixtures.yml`](examples/fhir-fixtures.yml): FHIR validation of example resources
+- [`android-bpr-app.yml`](examples/android-bpr-app.yml): Android CI + healthcare security + release (with BPR dispatch) caller for multi-module clinical Android suites
+- [`bpr-web-hub.yml`](examples/bpr-web-hub.yml): BPR web hub quality and trust caller (node-site, PKI/FHIR verify, healthcare security)
 
 ### Notes for callers
 
