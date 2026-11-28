@@ -36,3 +36,9 @@ jobs:
 
       - name: Run workflow security checks
         run: python3 script/lint_workflows.py
+
+      - name: Run workflow convention guard
+        run: python3 script/guard_workflows.py check --include-examples
+
+      - name: Run guard_workflows unit tests
+        run: python3 -m unittest -v script/test_guard_workflows.py

@@ -18,6 +18,8 @@ else
   printf '\nSKIP: actionlint not installed (brew install actionlint)\n'; fail=1
 fi
 run "workflow security checks" python3 script/lint_workflows.py
+run "workflow convention guard" python3 script/guard_workflows.py check --include-examples
+run "guard_workflows unit tests" python3 -m unittest -v script/test_guard_workflows.py
 run "bpr-verify unit tests" python3 -m unittest -v script/bpr-verify/test_bpr_verify.py
 run "phi-scan unit tests" python3 -m unittest discover -s script/phi-scan -v
 run "phi-scan doctests" bash -c 'cd script/phi-scan && python3 -m doctest phi_scan.py'
