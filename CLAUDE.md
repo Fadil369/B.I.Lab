@@ -17,6 +17,8 @@ BrainSAIT reusable GitHub Actions workflow library (`Fadil369/B.I.Lab`). No app 
 - phi-scan tests: `python -m unittest discover -s script/phi-scan -v` and `cd script/phi-scan && python -m doctest -v phi_scan.py`
 - Self-scan, must stay clean: `python script/phi-scan/phi_scan.py --root . --fail-on medium` (exit 1 = findings, 2 = usage error). Suppress a line inline with `phi-scan:ignore`.
 
+- Run every CI check locally (use this when hosted Actions is unavailable): `script/ci-local.sh`. Enable it as a pre-push gate with `pre-commit install --hook-type pre-push`.
+
 ## Workflow conventions
 - Pin every third-party action to a full commit SHA with the version as a trailing comment: `uses: actions/checkout@<sha> # v7.0.1`. Never use a tag or branch. This is mandatory for security tools (trivy, codeql, gitleaks), which run with `security-events: write`.
 - Top-level `permissions: contents: read`; grant extra permissions per job only.

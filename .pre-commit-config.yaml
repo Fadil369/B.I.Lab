@@ -10,3 +10,12 @@ repos:
   rev: v1.7.7
   hooks:
   - id: actionlint
+- repo: local
+  hooks:
+  - id: ci-local
+    name: ci-local (full CI checks before push)
+    entry: script/ci-local.sh
+    language: system
+    pass_filenames: false
+    always_run: true
+    stages: [pre-push]
