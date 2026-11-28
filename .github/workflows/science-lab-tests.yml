@@ -1,0 +1,55 @@
+# Internal CI for this library (not reusable): unit tests, doctests, and self-checks for script/science-lab.
+name: science-lab tests
+
+on:
+  pull_request:
+    paths:
+      - 'script/science-lab/**'
+      - '.github/workflows/science-lab-tests.yml'
+      - '.github/workflows/science-research-ci.yml'
+      - '.agents/skills/bilab-science-lab/**'
+      - 'docs/science-lab.md'
+      - 'examples/science-research-pipeline.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'script/science-lab/**'
+      - '.github/workflows/science-lab-tests.yml'
+      - '.github/workflows/science-research-ci.yml'
+      - '.agents/skills/bilab-science-lab/**'
+      - 'docs/science-lab.md'
+      - 'examples/science-research-pipeline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: science-lab (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Unit tests and doctests
+        run: |
+          python -m unittest -v script/science-lab/test_science_lab_verify.py
+          python -m doctest -v script/science-lab/science_lab_verify.py
+
+      - name: Repository self-verification and zero-PHI check
+        run: |
+          python script/science-lab/science_lab_verify.py \
+            --root . \
+            --fail-on medium \
+            --output "$RUNNER_TEMP/science-lab-selfcheck.json"
+          python script/phi-scan/phi_scan.py --root . --fail-on medium
