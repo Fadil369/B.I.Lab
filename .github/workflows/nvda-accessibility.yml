@@ -1,0 +1,115 @@
+# BrainSAIT reusable workflow: accessibility tests with the NVDA screen reader (https://www.nvaccess.org/)
+# Installs NVDA from download.nvaccess.org on a Windows runner, optionally verifies its SHA-256,
+# starts it with logging, runs your test command, and uploads the NVDA log. Use synthetic data only.
+name: NVDA Accessibility
+
+on:
+  workflow_call:
+    inputs:
+      nvda-version:
+        description: NVDA release to install (e.g. "2025.3.2"); see https://www.nvaccess.org/
+        type: string
+        default: "2025.3.2"
+      nvda-sha256:
+        description: Expected SHA-256 of the NVDA installer. Empty skips verification and prints the hash instead.
+        type: string
+        default: ""
+      start-nvda:
+        description: Start NVDA (minimal, with debug log) before running tests
+        type: boolean
+        default: true
+      test-command:
+        description: PowerShell command that runs the accessibility tests. Empty only installs NVDA.
+        type: string
+        default: ""
+      working-directory:
+        description: Directory in which test-command runs
+        type: string
+        default: "."
+      timeout-minutes:
+        type: number
+        default: 30
+      upload-log:
+        description: Upload the NVDA log as an artifact
+        type: boolean
+        default: true
+      artifact-suffix:
+        description: Optional suffix to keep artifact names unique when the workflow is called more than once
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  nvda:
+    name: NVDA ${{ inputs.nvda-version }}
+    runs-on: windows-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download and verify NVDA
+        shell: pwsh
+        env:
+          NVDA_VERSION: ${{ inputs.nvda-version }}
+          NVDA_SHA256: ${{ inputs.nvda-sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:NVDA_VERSION -notmatch '^[0-9]{4}\.[0-9]+(\.[0-9]+)?$') {
+            Write-Error "nvda-version must look like 2025.3.2"
+          }
+          $installer = Join-Path $env:RUNNER_TEMP "nvda_$($env:NVDA_VERSION).exe"
+          Invoke-WebRequest -Uri "https://download.nvaccess.org/releases/$($env:NVDA_VERSION)/nvda_$($env:NVDA_VERSION).exe" -OutFile $installer
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $installer).Hash.ToLowerInvariant()
+          if ($env:NVDA_SHA256) {
+            if ($actual -ne $env:NVDA_SHA256.Trim().ToLowerInvariant()) {
+              Write-Error "NVDA installer SHA-256 mismatch: expected $($env:NVDA_SHA256), got $actual"
+            }
+            Write-Host "NVDA installer SHA-256 verified: $actual"
+          } else {
+            Write-Host "::warning title=NVDA checksum not pinned::Set nvda-sha256 to $actual to pin this installer."
+          }
+          "NVDA_INSTALLER=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install NVDA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $p = Start-Process -FilePath $env:NVDA_INSTALLER -ArgumentList '--install-silent' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "NVDA installer exited with code $($p.ExitCode)" }
+          $exe = @("$env:ProgramFiles\NVDA\nvda.exe", "${env:ProgramFiles(x86)}\NVDA\nvda.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { Write-Error "nvda.exe not found after installation" }
+          "NVDA_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Start NVDA
+        if: inputs.start-nvda
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'nvda.log'
+          Start-Process -FilePath $env:NVDA_EXE -ArgumentList '--minimal', "--log-file=$log", '--log-level=10'
+          Start-Sleep -Seconds 10
+          if (-not (Get-Process -Name nvda -ErrorAction SilentlyContinue)) { Write-Error "NVDA did not start" }
+          "NVDA_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run accessibility tests
+        if: inputs.test-command != ''
+        shell: pwsh
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-Expression $env:TEST_COMMAND
+          if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload NVDA log
+        if: always() && inputs.upload-log && inputs.start-nvda
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nvda-log${{ inputs.artifact-suffix && format('-{0}', inputs.artifact-suffix) || '' }}
+          path: ${{ runner.temp }}/nvda.log
+          if-no-files-found: ignore
+          retention-days: 7
