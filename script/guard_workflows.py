@@ -26,16 +26,19 @@ Guardrail modes (first positional arg):
               idempotently (already-SHA-pinned and local/internal actions are skipped).
               Use --commit to git commit the remediated files; --include-examples also
               remediates examples/ caller workflows.
+              Add --check to only *detect* tag-based uses (exit 1 if any found) without
+              modifying files -- the CI-side Dependabot regression detector.
 
 Usage:
   python3 script/guard_workflows.py check [--include-examples] [paths...]
   python3 script/guard_workflows.py resolve <uses-line> [<uses-line> ...]
-  python3 script/guard_workflows.py fix [--include-examples] [--commit] [paths...]
+  python3 script/guard_workflows.py fix [--include-examples] [--commit] [--check] [paths...]
 
 Examples:
   python3 script/guard_workflows.py check
   python3 script/guard_workflows.py resolve "actions/checkout@v7" "docker/setup-qemu-action@v4"
   python3 script/guard_workflows.py fix --commit
+  python3 script/guard_workflows.py fix --check --include-examples   # CI: fail on Dependabot tag bumps
 """
 
 from __future__ import annotations
@@ -438,6 +441,26 @@ def fix_file(path: Path) -> list[tuple[str, str]]:
     return changes
 
 
+def detect_tag_uses(path: Path) -> list[tuple[int, str]]:
+    """Return [(line_no, line)] for every tag-based ``uses:`` in ``path``.
+
+    Skips already-SHA-pinned, local (./...), internal (Fadil369/B.I.Lab/...),
+    digest-pinned, and branch/composite refs -- exactly what ``fix`` remediates.
+    Used by ``fix --check`` as the CI-side Dependabot regression detector.
+    """
+    hits: list[tuple[int, str]] = []
+    for i, line in enumerate(path.read_text().split("\n"), start=1):
+        m = TAG_USES_RE.match(line)
+        if not m:
+            continue
+        prefix, action, ref, trailing = m.groups()
+        ref = ref.split("#")[0].strip()
+        if should_skip_action(action, ref) is not None:
+            continue
+        hits.append((i, line.rstrip()))
+    return hits
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -469,6 +492,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also remediate examples/ caller workflows",
     )
     p_fix.add_argument(
+        "--check",
+        action="store_true",
+        help="CI-side Dependabot regression detector: detect tag-based uses without modifying files; exit 1 if found",
+    )
+    p_fix.add_argument(
         "--commit",
         action="store_true",
         help="git commit the remediated files after fixing",
@@ -483,6 +511,38 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "fix":
+        # --check: CI-side Dependabot regression detector. Detect tag-based uses
+        # without modifying files; exit 1 so CI fails the PR before a tag bump lands.
+        if args.check:
+            if args.paths:
+                files = [Path(p) for p in args.paths]
+            else:
+                files = sorted(Path(".github/workflows").glob("*.yml"))
+                if args.include_examples:
+                    files += sorted(Path("examples").glob("*.yml"))
+
+            if not files:
+                sys.stderr.write("guard_workflows: no workflow files found\n")
+                return 2
+
+            total_hits = 0
+            for f in files:
+                hits = detect_tag_uses(f)
+                for line_no, line in hits:
+                    sys.stdout.write(f"DEPENDABOT-TAG: {f}:{line_no}: {line}\n")
+                    total_hits += 1
+
+            if total_hits:
+                sys.stdout.write(
+                    f"\nguard_workflows fix --check: {total_hits} tag-based use(s) across "
+                    f"{len(files)} file(s) -- run 'fix --commit' to remediate.\n"
+                )
+                return 1
+            sys.stdout.write(
+                f"guard_workflows fix --check: no tag-based uses across {len(files)} file(s) (clean).\n"
+            )
+            return 0
+
         if args.paths:
             files = [Path(p) for p in args.paths]
         else:

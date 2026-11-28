@@ -117,6 +117,33 @@ class GuardWorkflowsTest(unittest.TestCase):
         self.assertTrue(gw.resolve_tag_to_sha(f"actions/checkout@{SHA}").startswith("SKIP"))
         self.assertTrue(gw.resolve_tag_to_sha("./local@v1").startswith("SKIP"))
 
+    def test_detect_tag_uses_flags_tags_only(self) -> None:
+        text = (
+            "# BrainSAIT reusable workflow: synthetic example\n"
+            "name: demo\non:\n  workflow_call:\n    inputs:\n      node-version:\n        type: string\n        default: \"24\"\n"
+            "permissions:\n  contents: read\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+            f"      - uses: actions/checkout@{SHA} # v7.0.1\n"  # pinned -> skipped
+            "      - uses: actions/setup-node@v4\n"            # tag -> flagged
+            "      - uses: ./.github/workflows/x.yml\n"           # local -> skipped
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "demo.yml"
+            path.write_text(text)
+            hits = gw.detect_tag_uses(path)
+        self.assertEqual(len(hits), 1)
+        self.assertIn("actions/setup-node@v4", hits[0][1])
+
+    def test_detect_tag_uses_clean_is_empty(self) -> None:
+        text = (
+            "# BrainSAIT reusable workflow: synthetic example\n"
+            "name: demo\non:\n  workflow_call:\npermissions:\n  contents: read\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+            f"      - uses: actions/checkout@{SHA} # v7.0.1\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "demo.yml"
+            path.write_text(text)
+            self.assertEqual(gw.detect_tag_uses(path), [])
+
 
 if __name__ == "__main__":
     unittest.main()
