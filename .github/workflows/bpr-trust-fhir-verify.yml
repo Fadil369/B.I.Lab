@@ -38,9 +38,9 @@ on:
         type: string
         default: ""
       tools-ref:
-        description: Git ref of Fadil369/B.I.Lab to load script/bpr-verify from. Defaults to main until the v1 tag includes script/bpr-verify; pin to a tag or SHA in production.
+        description: Git ref of Fadil369/B.I.Lab to load script/bpr-verify from. Pin to a tag or SHA in production.
         type: string
-        default: "main"
+        default: "v1"
     secrets:
       tools-token:
         description: Optional token with read access to Fadil369/B.I.Lab (only needed if B.I.Lab is private).
